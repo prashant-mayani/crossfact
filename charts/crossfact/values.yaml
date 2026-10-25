@@ -55,19 +55,34 @@ backup:
   bucket: crossfact-backups
   namespace: ""                  # Object Storage namespace (terraform output)
   region: ""
+  # Backups sign in as their own OCI user, whose only permission is to read and
+  # write objects in this bucket (never delete). Not the VM's identity: nothing
+  # in this namespace can reach the instance metadata service.
+  # The deploy repo's foundation stack creates the user and prints these three.
+  auth:
+    tenancy: ""                  # ocid1.tenancy...
+    user: ""                     # ocid1.user... of the backup user
+    fingerprint: ""              # of its API key
+    # The private key: a Secret with key backup_api_private_key. Synced from
+    # OCI Vault when secrets.externalSecret.enabled; otherwise create it yourself.
+    secretName: crossfact-backup-key
+    vaultKey: backup_api_private_key
 
 restore:
-  enabled: true          # Argo CD Sync hook: restores the latest backup into an empty volume
+  # The app pod's first step (an init container): if the volume has no
+  # database, restore the latest backup before the app starts. If the backup
+  # exists but can't be read, the app does not start (it never starts on an
+  # empty database while a backup exists). To start fresh on purpose, set false.
+  enabled: true
 
 networkPolicy:
+  # The chart's own policies, for clusters without platform-owned ones. The
+  # Crossfact deploy repo turns this off and ships stricter policies itself.
   enabled: true
   webFromNamespace: cloudflared
   metricsFromNamespace: monitoring
   tracingNamespace: monitoring
   tracingPort: 4318
-  # Only backup/restore pods (label crossfact.io/imds=true) may reach the instance
-  # metadata service, i.e. act as the VM's OCI identity. The app pod never can.
-  metadataCidr: 169.254.169.254/32
 
 tracing:
   enabled: true

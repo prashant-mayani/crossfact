@@ -173,6 +173,44 @@ one. The verify job also fails when the bucket outgrows its 15 GB budget (the
 free allowance is 20 GB): shorten backup or upload retention. Run either by
 hand: `kubectl -n crossfact create job --from=cronjob/crossfact-backup backup-now`.
 
+If the log says `backup REFUSED`, the backup in the bucket holds conversations
+and the live database holds none (or under a tenth as many): it looks like the
+app started on an empty database, and uploading would replace the real backup.
+Nothing was uploaded. Find out why the database is empty before anything else
+(was the volume replaced? did the restore step run? `kubectl -n crossfact logs
+deploy/crossfact -c restore`). To get the data back, restore it (the deploy repo's
+`scripts/restore.sh latest`). Only if you deleted everything on purpose, run the
+backup once with `--force`:
+
+    kubectl -n crossfact create job --from=cronjob/crossfact-backup backup-force --dry-run=client -o json \
+      | jq '.spec.template.spec.containers[0].command += ["--force"]' | kubectl apply -f -
+
+<a id="restore-blocked"></a>
+### CrossfactRestoreBlocked (warning)
+
+The app pod's first step restores the latest backup when the volume has no
+database (after a rebuild). It found a backup it could not read, so it is
+holding the app down rather than starting it on an empty database. Read why:
+`kubectl -n crossfact logs deploy/crossfact -c restore`. The step retries on its
+own; once the cause is fixed the app starts with its data. Causes, by the error
+it prints:
+
+- `NotAuthenticated` (401): the backup user's key, fingerprint or user OCID is
+  wrong, or the key was rotated. Compare the chart values `backup.auth.*` with
+  `terraform -chdir=terraform/foundation output` and the Vault secret
+  `backup_api_private_key`.
+- `NotAuthorizedOrNotFound` / `BucketNotFound` (404): the policy doesn't cover
+  the bucket, or `backup.bucket`/`backup.namespace` is wrong.
+- `backup key ... not found`: the `crossfact-backup-key` ExternalSecret hasn't
+  synced (`kubectl -n crossfact get externalsecret`).
+- `damaged`: the latest backup doesn't open. Put an older one back with the
+  deploy repo's `scripts/restore.sh <object>`.
+
+To start with an empty database on purpose (the data really is gone), set the
+chart value `restore.enabled: false` for one sync, then set it back, and run
+the next backup with `--force` (above): the backup check would otherwise refuse
+to replace the old backup with the empty database.
+
 ## How the rules are tested
 
 `charts/crossfact/tests/render.sh` renders the chart, extracts the rules, runs
@@ -184,6 +222,7 @@ hand: `kubectl -n crossfact create job --from=cronjob/crossfact-backup backup-no
 - two bad runs out of two don't (the low-traffic guard)
 - half of successful runs slower than 240 s warns
 - no scrapeable pod fires `CrossfactDown`; an abandoned run fires `CrossfactRunsAbandoned`
+- a restore step stuck in CrashLoopBackOff for 5 minutes fires `CrossfactRestoreBlocked`
 - the availability SLI counts a gap in the data as downtime
 
 ## Dashboards

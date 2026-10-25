@@ -177,6 +177,7 @@ spec:
           annotations:
             summary: A pod died with runs in flight; they were closed out and refunded.
             runbook_url: {{ $runbook }}#abandoned
+        {{- if .Values.backup.enabled }}
         - alert: CrossfactBackupStale
           expr: |
             time() - max(kube_cronjob_status_last_successful_time{namespace="{{ $ns }}",cronjob="crossfact-backup"}) > 26 * 3600
@@ -191,4 +192,18 @@ spec:
           annotations:
             summary: The weekly restore test hasn't passed in over 8 days.
             runbook_url: {{ $runbook }}#backups
+        {{- end }}
+        {{- if .Values.restore.enabled }}
+        - alert: CrossfactRestoreBlocked
+          # The app pod's restore step keeps failing: the volume has no database and
+          # the backup can't be read. The app stays down on purpose. CrossfactDown
+          # pages for the outage; this one says why.
+          expr: |
+            max by (pod) (kube_pod_init_container_status_waiting_reason{namespace="{{ $ns }}",container="restore",reason=~"CrashLoopBackOff|CreateContainerConfigError|CreateContainerError"}) > 0
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: "The app is held down: its restore step can't read the backup ({{`{{ $labels.pod }}`}})."
+            runbook_url: {{ $runbook }}#restore-blocked
+        {{- end }}
 {{- end }}

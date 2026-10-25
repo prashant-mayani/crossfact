@@ -1,34 +1,4 @@
-{{- if .Values.restore.enabled }}
-# Runs on every sync before the app (wave -1). A no-op unless the volume is
-# empty, which after a rebuild it is: then it pulls the latest backup.
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: crossfact-restore
-  labels:
-    {{- include "crossfact.labels" . | nindent 4 }}
-  annotations:
-    argocd.argoproj.io/hook: Sync
-    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
-    argocd.argoproj.io/sync-wave: "-1"
-spec:
-  backoffLimit: 2
-  activeDeadlineSeconds: 900
-  template:
-    metadata:
-      labels:
-        {{- include "crossfact.selector" . | nindent 8 }}
-        app.kubernetes.io/component: restore
-        crossfact.io/imds: "true"
-    spec:
-      {{- include "crossfact.jobPod" . | nindent 6 }}
-      containers:
-        - name: restore
-          command: [python, scripts/maintain.py, restore]
-          {{- include "crossfact.jobContainer" . | nindent 10 }}
-{{- end }}
 {{- if .Values.backup.enabled }}
----
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -50,7 +20,6 @@ spec:
           labels:
             {{- include "crossfact.selector" . | nindent 12 }}
             app.kubernetes.io/component: backup
-            crossfact.io/imds: "true"
         spec:
           {{- include "crossfact.jobPod" . | nindent 10 }}
           containers:
@@ -79,7 +48,6 @@ spec:
           labels:
             {{- include "crossfact.selector" . | nindent 12 }}
             app.kubernetes.io/component: backup-verify
-            crossfact.io/imds: "true"
         spec:
           {{- include "crossfact.jobPod" . | nindent 10 }}
           containers:

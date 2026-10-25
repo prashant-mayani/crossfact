@@ -39,6 +39,16 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.restore.enabled }}
+      # First step of every app pod: if the volume has no database (a rebuild),
+      # restore the latest backup. A no-op otherwise. If a backup exists but
+      # can't be read, this fails and keeps failing, so the app never starts on
+      # an empty database that the next backup would then save over the real one.
+      initContainers:
+        - name: restore
+          command: [python, scripts/maintain.py, restore]
+          {{- include "crossfact.jobContainer" . | nindent 10 }}
+      {{- end }}
       containers:
         - name: crossfact
           image: {{ include "crossfact.image" . }}
@@ -81,3 +91,6 @@ spec:
           secret:
             secretName: {{ include "crossfact.secretName" . }}
             defaultMode: 0440
+        {{- if .Values.restore.enabled }}
+        {{- include "crossfact.backupKeyVolume" . | nindent 8 }}
+        {{- end }}

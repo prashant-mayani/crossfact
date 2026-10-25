@@ -1,6 +1,7 @@
 {{- if le (int .Values.terminationGracePeriodSeconds) (add (int .Values.runDeadlineSeconds) 60) -}}
 {{- fail "terminationGracePeriodSeconds must exceed runDeadlineSeconds + 60, or a deploy can kill a run mid-flight" -}}
 {{- end -}}
+{{- include "crossfact.validateBackup" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -28,6 +29,12 @@ data:
       bucket: {{ .Values.backup.bucket | quote }}
       namespace: {{ .Values.backup.namespace | quote }}
       region: {{ .Values.backup.region | quote }}
+      auth:
+        mode: api_key
+        tenancy: {{ .Values.backup.auth.tenancy | quote }}
+        user: {{ .Values.backup.auth.user | quote }}
+        fingerprint: {{ .Values.backup.auth.fingerprint | quote }}
+        key_file: /var/run/secrets/crossfact-backup/backup_api_private_key
     uploads:
       {{- toYaml .Values.config.uploads | nindent 6 }}
     quotas:

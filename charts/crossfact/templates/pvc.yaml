@@ -6,7 +6,9 @@ metadata:
   labels:
     {{- include "crossfact.labels" . | nindent 4 }}
   annotations:
-    argocd.argoproj.io/sync-wave: "-2"
+    # No sync wave: with WaitForFirstConsumer storage (k3s local-path) the claim
+    # stays Pending, which Argo CD counts as not yet healthy, until a pod uses
+    # it. So it must sync in the same wave as the Deployment, never before it.
     # The chats live here. Deleting the Application must never delete them.
     argocd.argoproj.io/sync-options: Delete=false
     helm.sh/resource-policy: keep

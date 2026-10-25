@@ -113,6 +113,23 @@ tests:
               summary: A pod died with runs in flight; they were closed out and refunded.
               runbook_url: https://github.com/OWNER/crossfact/blob/main/docs/SLO.md#abandoned
 
+  - name: a restore that cannot read the backup is named as the cause
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_init_container_status_waiting_reason{namespace="crossfact",pod="crossfact-7d9-x",container="restore",reason="CrashLoopBackOff"}'
+        values: '0x5 1x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: CrossfactRestoreBlocked
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: CrossfactRestoreBlocked
+        exp_alerts:
+          - exp_labels: {severity: warning, pod: crossfact-7d9-x}
+            exp_annotations:
+              summary: "The app is held down: its restore step can't read the backup (crossfact-7d9-x)."
+              runbook_url: https://github.com/OWNER/crossfact/blob/main/docs/SLO.md#restore-blocked
+
   # --- recorded SLI values are what the docs say they are -----------------------------
   - name: availability window counts gaps as downtime
     interval: 30s

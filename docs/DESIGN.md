@@ -210,8 +210,10 @@ leaves runs "running" forever. Each pod refreshes a heartbeat on its runs every
 - **The pod**: non-root, read-only root filesystem, no capabilities, seccomp
   RuntimeDefault, and NetworkPolicies that let it reach the internet but not
   the cluster, the node, or the cloud's metadata service (which would let it
-  act as the VM). Backups run as separate Jobs that alone may use the VM's
-  identity.
+  act as the VM). Nothing in the app's namespace uses the VM's identity:
+  backups sign in as their own OCI user, whose only permission is reading and
+  writing objects in the backup bucket, and only the backup and restore
+  containers mount that user's key.
 - **The image**: built in CI, scanned, signed; the cluster admits only images
   signed by this repository's main-branch pipeline.
 
@@ -219,10 +221,27 @@ leaves runs "running" forever. Each pod refreshes a heartbeat on its runs every
 
 Nightly: a consistent SQLite snapshot (the online backup API, safe while the
 app writes) plus uploads, as `crossfact-YYYYMMDD-HHMM.tar.gz` and
-`crossfact-latest.tar.gz` in a versioned bucket. The VM's identity can create and
-overwrite objects but not delete them, so a compromised node can't destroy the
-history; a lifecycle rule ages old copies out. Weekly, a separate Job downloads
-the latest backup, runs `PRAGMA integrity_check`, counts rows, and checks the
-bucket still fits the free 20 GB. On a fresh cluster, an Argo CD sync hook
-restores the latest backup into the empty volume before the app starts, and
-reports how old it was (the data lost in that rebuild).
+`crossfact-latest.tar.gz` in a versioned bucket, each tagged with its row counts.
+The backup user can create and overwrite objects but not delete them, so a
+stolen key can't destroy the history; a lifecycle rule ages old copies out.
+Weekly, a separate Job downloads the latest backup, runs `PRAGMA
+integrity_check`, counts rows, and checks the bucket still fits the free 20 GB.
+
+Restore is the app pod's init container, so it runs before the app on every
+start, under Argo CD or plain Helm alike. With a database on the volume it does
+nothing. Without one (a rebuilt node), it restores the latest backup and logs
+how old it was: the data lost in that rebuild. Two rules keep a rebuild from
+losing data quietly:
+
+- **Only "no such object" means "first deploy".** Any other error (wrong key,
+  missing bucket, policy, outage) is retried for five minutes and then fails the
+  init container, which keeps retrying. The app does not start on an empty
+  database while a backup exists; `CrossfactRestoreBlocked` says why.
+- **A backup never replaces conversations with nothing.** If the latest backup
+  holds threads and the database holds none (or, from 50 up, under a tenth as
+  many), the backup is refused and nothing is uploaded, unless run with
+  `--force`.
+
+Archives are staged on the data volume and streamed to and from the bucket, so
+neither the 1 GiB scratch space nor the jobs' memory limit caps how big the
+uploads can grow.

@@ -33,8 +33,9 @@ spec:
       ports: [{port: 9095, protocol: TCP}]
 ---
 # Egress for every Crossfact pod: DNS, traces, and the public internet (the model
-# APIs). Private ranges and link-local are excluded: no other node, VCN host,
-# or the instance-metadata service (169.254.169.254).
+# APIs, Object Storage). Private ranges and link-local are excluded: no other
+# node, no VCN host, and never the instance metadata service (169.254.169.254),
+# which would let a pod act as the VM.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -59,20 +60,4 @@ spec:
         - ipBlock:
             cidr: 0.0.0.0/0
             except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10]
----
-# Backup and restore pods (never the app) may act as the VM's OCI identity.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: crossfact-imds-egress
-  labels:
-    {{- include "crossfact.labels" . | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels: {crossfact.io/imds: "true"}
-  policyTypes: [Egress]
-  egress:
-    - to:
-        - ipBlock: {cidr: {{ .Values.networkPolicy.metadataCidr }}}
-      ports: [{port: 80, protocol: TCP}]
 {{- end }}
