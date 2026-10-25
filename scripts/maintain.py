@@ -63,6 +63,21 @@ def log(event: str, **fields) -> None:
 
 # ---- Object Storage ------------------------------------------------------------------------
 
+def key_fingerprint(pem: bytes) -> str:
+    """OCI's API-key fingerprint: MD5 of the public key in DER form, colon-separated
+    (what `openssl rsa -pubout -outform DER | openssl md5 -c` prints). Computing it
+    from the key means rotating the key changes nothing in the chart."""
+    import hashlib
+
+    from cryptography.hazmat.primitives import serialization
+
+    key = serialization.load_pem_private_key(pem, password=None)
+    der = key.public_key().public_bytes(serialization.Encoding.DER,
+                                        serialization.PublicFormat.SubjectPublicKeyInfo)
+    digest = hashlib.md5(der, usedforsecurity=False).hexdigest()
+    return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
+
+
 def storage_config() -> dict:
     """OCI SDK config for the backup credential (chart values backup.auth.*)."""
     b = cfg()["backup"]
@@ -70,13 +85,22 @@ def storage_config() -> dict:
     mode = auth.get("mode", "api_key")
     if mode != "api_key":
         raise SystemExit(f"backup.auth.mode must be api_key, not {mode!r}: backups never use the VM's identity")
-    conf = {"tenancy": auth.get("tenancy"), "user": auth.get("user"), "fingerprint": auth.get("fingerprint"),
+    conf = {"tenancy": auth.get("tenancy"), "user": auth.get("user"),
             "key_file": auth.get("key_file") or DEFAULT_KEY_FILE, "region": b.get("region")}
     missing = [k for k, v in conf.items() if not v]
     if missing:
         raise SystemExit(f"backup.auth is missing: {', '.join(missing)} (chart values backup.auth.*, backup.region)")
     if not os.path.exists(conf["key_file"]):
         raise SystemExit(f"backup key {conf['key_file']} not found: is the crossfact-backup-key secret synced?")
+    with open(conf["key_file"], "rb") as fh:
+        pem = fh.read()
+    if pem.startswith(b"UNSET"):
+        raise SystemExit("the Vault secret backup_api_private_key is still UNSET: store the backup user's "
+                         "private key (the deploy repo's scripts/backup-key.sh)")
+    try:
+        conf["fingerprint"] = auth.get("fingerprint") or key_fingerprint(pem)
+    except (ValueError, TypeError) as e:
+        raise SystemExit(f"the backup key in {conf['key_file']} is not an unencrypted PEM private key ({e})") from e
     return conf
 
 
@@ -168,14 +192,20 @@ def _snapshot_tarball(workdir: str) -> tuple[str, dict]:
 
 def _latest_counts(client, ns: str, bucket: str) -> dict | None:
     """Row counts recorded on the current latest backup, or None if there is none
-    (or it was written before backups recorded them)."""
+    (or it was written before backups recorded them).
+
+    A one-byte GET rather than a HEAD: a HEAD error has no body, so a missing
+    object, a missing bucket and a refused request all look the same."""
     try:
-        head = client.head_object(ns, bucket, LATEST)
+        resp = client.get_object(ns, bucket, LATEST, range="bytes=0-0")
     except Exception as e:
         if _is_missing_object(e):
             return None
         raise
-    headers = {k.lower(): v for k, v in (getattr(head, "headers", None) or {}).items()}
+    raw = getattr(resp.data, "raw", None)
+    if raw is not None and hasattr(raw, "close"):
+        raw.close()
+    headers = {k.lower(): v for k, v in (getattr(resp, "headers", None) or {}).items()}
     if "opc-meta-threads" not in headers:
         return None
     return {k: int(headers.get(f"opc-meta-{k}", 0)) for k in COUNTED}

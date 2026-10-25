@@ -33,7 +33,9 @@ data:
         mode: api_key
         tenancy: {{ .Values.backup.auth.tenancy | quote }}
         user: {{ .Values.backup.auth.user | quote }}
-        fingerprint: {{ .Values.backup.auth.fingerprint | quote }}
+        {{- with .Values.backup.auth.fingerprint }}
+        fingerprint: {{ . | quote }}
+        {{- end }}
         key_file: /var/run/secrets/crossfact-backup/backup_api_private_key
     uploads:
       {{- toYaml .Values.config.uploads | nindent 6 }}

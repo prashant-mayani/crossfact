@@ -27,7 +27,7 @@ class StreamedBody:
 
     def __init__(self, payload: bytes):
         self.raw = SimpleNamespace(stream=lambda size, decode_content=False: (
-            payload[i:i + size] for i in range(0, len(payload), size)))
+            payload[i:i + size] for i in range(0, len(payload), size)), close=lambda: None)
 
     @property
     def content(self):
@@ -57,16 +57,22 @@ class FakeObjectStorage:
     def _headers(self, name, age_s):
         return {"last-modified": email.utils.formatdate(time.time() - age_s, usegmt=True), **self.meta.get(name, {})}
 
-    def get_object(self, ns, bucket, name):
+    def get_object(self, ns, bucket, name, range=None):  # "range" is the SDK's parameter name
         self._maybe_fail("get")
         if name not in self.objects:
             raise service_error(404, "ObjectNotFound")
-        return SimpleNamespace(data=StreamedBody(self.objects[name]), headers=self._headers(name, 600))
+        payload = self.objects[name]
+        if range is not None:
+            start, end = (int(x) for x in range.removeprefix("bytes=").split("-"))
+            payload = payload[start:end + 1]
+        return SimpleNamespace(data=StreamedBody(payload), headers=self._headers(name, 600))
 
     def head_object(self, ns, bucket, name):
+        # A real HEAD error has no body, so the SDK's error carries no code: a missing
+        # object can't be told apart from a missing bucket or a refused request.
         self._maybe_fail("head")
         if name not in self.objects:
-            raise service_error(404, "ObjectNotFound")
+            raise ServiceError(404, None, {}, None)
         return SimpleNamespace(headers=self._headers(name, 0))
 
     def get_bucket(self, ns, bucket, fields=None):
@@ -106,6 +112,12 @@ def wipe_volume(env):
             os.remove(db.db_file() + suffix)
         except FileNotFoundError:
             pass
+
+
+def test_the_first_backup_ever_goes_through(maintain, env):
+    seed()
+    maintain.backup()  # nothing in the bucket yet: must not be mistaken for an error
+    assert LATEST in maintain.store.objects
 
 
 def test_backup_restore_verify_round_trip(maintain, env, capsys):
@@ -304,31 +316,65 @@ def load_maintain():
     return mod
 
 
-def test_api_key_credential_builds_a_real_client(configured, env):
+def write_key(path, fmt="PKCS8"):
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
 
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    path.write_bytes(key.private_bytes(serialization.Encoding.PEM, getattr(serialization.PrivateFormat, fmt),
+                                       serialization.NoEncryption()))
+    return key
+
+
+AUTH = {"mode": "api_key", "tenancy": "ocid1.tenancy.oc1..aaaa", "user": "ocid1.user.oc1..bbbb"}
+
+
+def test_api_key_credential_builds_a_real_client(configured, env):
     key_file = env / "backup_api_private_key"
-    key_file.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-                                           serialization.NoEncryption()))
-    configured({"mode": "api_key", "tenancy": "ocid1.tenancy.oc1..aaaa", "user": "ocid1.user.oc1..bbbb",
-                "fingerprint": ":".join(["ab"] * 16), "key_file": str(key_file)})
+    write_key(key_file)
+    configured({**AUTH, "key_file": str(key_file)})
     client, ns, bucket = load_maintain().object_storage()  # no network until a request is made
     assert (ns, bucket) == ("ns", "crossfact-backups")
     assert "eu-zurich-1" in client.base_client.endpoint
 
 
+@pytest.mark.parametrize("fmt", ["PKCS8", "TraditionalOpenSSL"])  # openssl genrsa writes either, by version
+def test_fingerprint_is_what_openssl_and_the_console_show(env, fmt):
+    import hashlib
+
+    from cryptography.hazmat.primitives import serialization
+
+    key = write_key(env / "k.pem", fmt)
+    der = key.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    expected = ":".join(f"{b:02x}" for b in hashlib.md5(der, usedforsecurity=False).digest())
+    assert load_maintain().key_fingerprint((env / "k.pem").read_bytes()) == expected
+
+
 def test_api_key_credential_reports_what_is_missing(configured, env):
-    configured({"mode": "api_key", "tenancy": "ocid1.tenancy.oc1..aaaa", "user": "", "fingerprint": ""})
-    with pytest.raises(SystemExit, match="missing: user, fingerprint"):
+    configured({**AUTH, "user": ""})
+    with pytest.raises(SystemExit, match="missing: user"):
         load_maintain().object_storage()
 
 
 def test_api_key_credential_needs_the_synced_key_file(configured, env):
-    configured({"mode": "api_key", "tenancy": "ocid1.tenancy.oc1..aaaa", "user": "ocid1.user.oc1..bbbb",
-                "fingerprint": ":".join(["ab"] * 16), "key_file": str(env / "absent")})
+    configured({**AUTH, "key_file": str(env / "absent")})
     with pytest.raises(SystemExit, match="crossfact-backup-key secret synced"):
+        load_maintain().object_storage()
+
+
+def test_an_unset_key_slot_is_named_as_the_cause(configured, env):
+    key_file = env / "backup_api_private_key"
+    key_file.write_text("UNSET")  # what Vault holds until the key is stored
+    configured({**AUTH, "key_file": str(key_file)})
+    with pytest.raises(SystemExit, match="still UNSET"):
+        load_maintain().object_storage()
+
+
+def test_a_key_that_is_not_a_pem_private_key_is_named_as_the_cause(configured, env):
+    key_file = env / "backup_api_private_key"
+    key_file.write_text("-----BEGIN PUBLIC KEY-----\nnope\n-----END PUBLIC KEY-----\n")
+    configured({**AUTH, "key_file": str(key_file)})
+    with pytest.raises(SystemExit, match="not an unencrypted PEM private key"):
         load_maintain().object_storage()
 
 

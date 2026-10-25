@@ -58,11 +58,11 @@ backup:
   # Backups sign in as their own OCI user, whose only permission is to read and
   # write objects in this bucket (never delete). Not the VM's identity: nothing
   # in this namespace can reach the instance metadata service.
-  # The deploy repo's foundation stack creates the user and prints these three.
+  # The deploy repo's foundation stack creates the user and prints these two.
   auth:
     tenancy: ""                  # ocid1.tenancy...
     user: ""                     # ocid1.user... of the backup user
-    fingerprint: ""              # of its API key
+    fingerprint: ""              # empty = worked out from the key, so rotating it changes nothing here
     # The private key: a Secret with key backup_api_private_key. Synced from
     # OCI Vault when secrets.externalSecret.enabled; otherwise create it yourself.
     secretName: crossfact-backup-key

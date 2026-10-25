@@ -42,9 +42,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- fail (printf "backup.%s is required while backup.enabled or restore.enabled is true (or set both false)" $k) -}}
 {{- end -}}
 {{- end -}}
-{{- range $k := list "tenancy" "user" "fingerprint" "secretName" -}}
+{{- range $k := list "tenancy" "user" "secretName" -}}
 {{- if not (index $b.auth $k) -}}
-{{- fail (printf "backup.auth.%s is required while backup.enabled or restore.enabled is true: backups sign in as their own OCI user (the deploy repo's foundation stack prints these values)" $k) -}}
+{{- fail (printf "backup.auth.%s is required while backup.enabled or restore.enabled is true: backups sign in as their own OCI user (the deploy repo's foundation stack prints them)" $k) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
