@@ -1,10 +1,8 @@
-"""HTTP behaviour: auth, privacy, headers, the ask->poll loop, drain, quotas, faults, metrics."""
+"""HTTP behaviour: auth, the one account, headers, the ask->poll loop, drain, quotas, faults, metrics."""
 import re
 import time
 
 from prometheus_client import generate_latest
-
-from tests.conftest import enroll
 
 
 def wait_done(client, mid, timeout=15):
@@ -80,16 +78,29 @@ def test_failed_runs_do_not_cost_quota(client, admin, llm):
     assert db.usage_today(db.get_user(username="admin")["id"]) == 0
 
 
-def test_users_cannot_see_each_other(client, admin, llm):
-    r = ask(client, admin)
-    mid, tid = r.json()["message_id"], r.json()["thread_id"]
-    wait_done(client, mid)
-    client.post("/admin/users", data={"username": "wife", "password": "another-pass-1", "csrf": admin})
-    client.post("/logout")
-    enroll(client, "wife", "another-pass-1")
-    assert client.get(f"/api/messages/{mid}").status_code == 404
-    assert client.get(f"/chat/{tid}").status_code == 404
-    assert client.get("/admin").status_code == 403
+def test_single_user_there_is_no_way_to_add_accounts(client, admin):
+    r = client.post("/admin/users", data={"username": "guest", "password": "another-pass-1", "csrf": admin})
+    assert r.status_code in (404, 405)
+    page = client.get("/admin").text
+    assert "Create user" not in page and "Fault injection" in page and "app.admin reset-2fa" in page
+
+
+def test_accounts_from_a_multi_user_version_are_disabled_at_startup(env):
+    from fastapi.testclient import TestClient
+
+    from app import auth, db
+    from app.main import app
+
+    db.init_db()
+    owner = db.create_user("prashant", auth.hash_pw("owner-password-1"), role="admin")
+    db.create_user("guest", auth.hash_pw("guest-password-1"))
+    with TestClient(app, base_url="https://testserver") as c:  # startup runs ensure_owner
+        assert db.get_user(username="guest")["disabled"] == 1
+        assert db.get_user(uid=owner)["disabled"] == 0
+        assert c.post("/login", data={"username": "guest", "password": "guest-password-1"}).status_code == 401
+        assert c.post("/login", data={"username": "prashant", "password": "owner-password-1"},
+                      follow_redirects=False).status_code == 303
+    assert db.get_user(username="admin") is None  # the existing owner is kept, not replaced
 
 
 def test_csrf_and_input_validation(client, admin, llm):
@@ -119,7 +130,7 @@ def test_daily_quota(client, admin, llm, monkeypatch):
     from app import config
 
     cfg = config.cfg()
-    monkeypatch.setitem(cfg["quotas"], "admin_daily_runs", 1)
+    monkeypatch.setitem(cfg["quotas"], "daily_runs", 1)
     wait_done(client, ask(client, admin).json()["message_id"])
     r = ask(client, admin)
     assert r.status_code == 429 and "quota" in r.json()["detail"].lower()

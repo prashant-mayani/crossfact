@@ -6,30 +6,21 @@
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 
 <div class="card">
-  <h2>Users</h2>
+  <h2>Models</h2>
+  <p class="hint">Which providers have their keys, and which models are paused after repeated failures (they retry by themselves after a cooldown).</p>
   <table class="users">
-    <tr><th>User</th><th>Role</th><th>Status</th><th></th><th></th></tr>
-    {% for u in users %}
-    <tr>
-      <td>{{ u.username }}</td><td>{{ u.role }}</td>
-      <td>{{ 'disabled' if u.disabled else 'active' }}</td>
-      <td>{% if u.id != s.user_id %}<form method="post" action="/admin/users/{{ u.id }}/toggle"><input type="hidden" name="csrf" value="{{ s.csrf }}"><button class="link">{{ 'Enable' if u.disabled else 'Disable' }}</button></form>{% endif %}</td>
-      <td><form method="post" action="/admin/users/{{ u.id }}/reset2fa" data-confirm="Reset two-factor for {{ u.username }}? They will scan a new QR code at next sign-in."><input type="hidden" name="csrf" value="{{ s.csrf }}"><button class="link">Reset two-factor</button></form></td>
-    </tr>
+    <tr><th>Provider</th><th>Key</th><th>Paused</th></tr>
+    {% for p in providers %}
+    <tr><td>{{ p.label }}</td><td>{{ 'set' if p.ok else 'missing' }}</td><td>{{ p.open | join(', ') if p.open else '—' }}</td></tr>
     {% endfor %}
   </table>
 </div>
 
 <div class="card">
-  <h2>Create user</h2>
-  <p class="hint">Hand over the temporary password in person. They set up two-factor at first sign-in and change the password in Settings. Their chats and files are visible only to them.</p>
-  <form method="post" action="/admin/users">
-    <input type="hidden" name="csrf" value="{{ s.csrf }}">
-    <label>Username<input name="username" required pattern="[a-zA-Z0-9._-]{2,32}" autocomplete="off"></label>
-    <label>Temporary password<input name="password" minlength="10" required autocomplete="new-password"></label>
-    <label>Role<select name="role"><option value="user">user</option><option value="admin">admin</option></select></label>
-    <button class="primary">Create user</button>
-  </form>
+  <h2>Account</h2>
+  <p class="hint">Crossfact has one account: yours. Lost your authenticator, forgot the password, or locked out? From a machine with cluster access:</p>
+  <pre>kubectl -n crossfact exec -it deploy/crossfact -- python -m app.admin reset-2fa</pre>
+  <p class="hint">Also <code>set-password</code>, <code>unlock</code>, <code>rename</code> and <code>status</code>.</p>
 </div>
 
 <div class="card" id="faults">

@@ -269,3 +269,29 @@ def test_a_merge_that_breaks_is_still_merge_failed(llm):
     llm.on(purpose="merge", error=ProviderError("503", ErrorKind.SERVER))
     out = run()
     assert out["outcome"] == "degraded" and out["degraded"] == ["merge_failed"]
+
+
+def test_a_judge_without_its_key_is_skipped_not_called(llm, monkeypatch):
+    """An optional provider you haven't signed up for must not cost a failed call (or
+    fire the auth alert): the chain goes straight to the next configured judge."""
+    from app.config import registry
+
+    reg = registry()
+    monkeypatch.setitem(reg["providers"]["judge"], "secret", "judge_api_key")  # never set in the test env
+    monkeypatch.setitem(reg["pipeline"], "judge_fallbacks", [{"provider": "alpha", "model": "a1", "effort": "high"}])
+    llm.on(purpose="compare", reply=COMPARE_CONFLICT)
+    out = run()
+    assert llm.count(provider="judge") == 0
+    assert stages(out, "judge")[0]["judge"] == "alpha/a1"
+
+
+def test_no_configured_judge_degrades_with_a_reason(llm, monkeypatch):
+    from app.config import registry
+
+    reg = registry()
+    monkeypatch.setitem(reg["providers"]["judge"], "secret", "judge_api_key")
+    monkeypatch.setitem(reg["pipeline"], "judge_fallbacks", [])
+    llm.on(purpose="compare", reply=COMPARE_CONFLICT)
+    out = run()
+    assert out["outcome"] == "degraded" and "judge_failed" in out["degraded"]
+    assert any(e.get("kind") == "not_configured" for e in stages(out, "error"))

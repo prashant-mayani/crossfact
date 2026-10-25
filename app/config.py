@@ -21,18 +21,20 @@ _DEFAULTS: dict = {
     "data_dir": "/data",
     # file  -> one file per secret under secrets_dir (Kubernetes Secret volume, fed by External Secrets)
     # env   -> environment variables named like the secret, upper-cased (laptop, tests)
-    # vault -> OCI Vault via instance principal (VM without Kubernetes)
     "secrets_mode": "file",
     "secrets_dir": "/var/run/secrets/crossfact",
-    "oci": {"vault_id": "", "region": ""},
-    "backup": {"bucket": "", "namespace": "", "region": ""},
+    # Object Storage for backups, signed in as the backup user (scripts/maintain.py)
+    "backup": {"bucket": "", "namespace": "", "region": "", "auth": {}},
     "uploads": {
         "retention_days": 30,
         "max_mb": 25,
         "allowed_ext": [".txt", ".md", ".csv", ".json", ".pdf", ".png", ".jpg", ".jpeg",
                         ".webp", ".log", ".py", ".yaml", ".yml"],
     },
-    "quotas": {"user_daily_runs": 40, "admin_daily_runs": 200},
+    # One account; the cap keeps a runaway script or a stolen session from burning the free tiers.
+    "quotas": {"daily_runs": 200},
+    # Values substituted into providers.yaml base URLs, e.g. {cloudflare_account_id} (not secrets).
+    "provider_vars": {},
     "session_hours": 72,
     "base_url": "",
     "server": {

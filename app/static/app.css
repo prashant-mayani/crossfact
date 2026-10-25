@@ -39,6 +39,8 @@ h2 { font-size: 1.05rem; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
   padding: 1.1rem 1.2rem; margin: .8rem 0; }
 .card.auth { width: min(380px, 92vw); }
+.card pre { overflow-x: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: .5rem .7rem; font-size: .85rem; }
 .sub { color: var(--dim); text-align: center; margin-top: 0; }
 label { display: block; margin: .7rem 0; color: var(--dim); font-size: .9rem; }
 input, select, textarea { width: 100%; margin-top: .25rem; padding: .55rem .65rem;

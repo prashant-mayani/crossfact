@@ -1,17 +1,22 @@
 # syntax=docker/dockerfile:1.7
-# Crossfact image: FastAPI app + Claude Code + Gemini CLI.
+# Crossfact image: the FastAPI app and the Claude Code CLI.
 # CI builds it natively on a GitHub-hosted arm64 runner (the cluster is an Ampere A1 VM),
-# scans it with Trivy, signs it with cosign (keyless), and pins it by digest in GitOps.
+# checks the CLI still reads its token, scans it with Trivy, signs it with cosign
+# (keyless), and pins it by digest in GitOps.
 
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm
 ARG NODE_IMAGE=node:22-bookworm-slim
 
-# ---- model CLIs, pinned by image/package-lock.json ----------------------------------
-FROM ${NODE_IMAGE} AS clis
+# ---- Claude Code, pinned by image/package-lock.json ------------------------------------
+# Node is only needed to install it: the package's postinstall puts a native binary
+# (glibc, no other dependencies) in place, and that binary is all the runtime gets.
+FROM ${NODE_IMAGE} AS claude
 WORKDIR /opt/clis
 COPY image/package.json image/package-lock.json ./
-# Claude Code's postinstall links its native binary, so lifecycle scripts must run here.
-RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
+RUN npm ci --omit=dev --no-audit --no-fund \
+ && cp node_modules/@anthropic-ai/claude-code/bin/claude.exe /opt/claude \
+ && /opt/claude --version \
+ && npm cache clean --force
 
 # ---- Python dependencies, hash-pinned ------------------------------------------------
 FROM ${PYTHON_IMAGE} AS deps
@@ -24,22 +29,20 @@ RUN python -m venv /opt/venv \
 FROM ${PYTHON_IMAGE}
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="crossfact" \
-      org.opencontainers.image.description="Two models, one answer: Claude + Gemini consensus" \
+      org.opencontainers.image.description="Self-hosted multi-model answers: Claude, Gemini and GPT-OSS" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}"
 
-# tini reaps the CLIs' grandchildren and forwards SIGTERM, so graceful drain works as PID 1.
-# libstdc++6 is what the copied Node runtime (used by Gemini CLI) links against.
+# tini reaps the CLI's children and forwards SIGTERM, so graceful drain works as PID 1.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends tini ca-certificates libstdc++6 \
+ && apt-get install -y --no-install-recommends tini ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --uid 10001 --create-home --home-dir /home/crossfact --shell /usr/sbin/nologin crossfact
 
-COPY --from=clis /usr/local/bin/node /usr/local/bin/node
-COPY --from=clis /opt/clis /opt/clis
+COPY --from=claude /opt/claude /usr/local/bin/claude
 COPY --from=deps /opt/venv /opt/venv
 
-ENV PATH=/opt/clis/node_modules/.bin:/opt/venv/bin:$PATH \
+ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     CROSSFACT_VERSION=${VERSION} \

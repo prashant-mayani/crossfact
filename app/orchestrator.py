@@ -27,7 +27,7 @@ import time
 
 from . import telemetry as tm
 from .config import pipeline_setting, registry
-from .providers import ask
+from .providers import ask, configured
 from .resilience import Deadline, ErrorKind, ProviderError
 
 SUCCESS = {"agreed", "debated", "judged", "union", "single"}
@@ -214,9 +214,10 @@ def _both(fn_a, fn_b, grace_s: float) -> dict[str, tuple]:
 
 
 def _chain(primary_key: str, fallback_key: str) -> list[dict]:
+    """The configured models for a pipeline role, in order (unconfigured ones skipped)."""
     pipe = registry()["pipeline"]
-    chain = [pipe.get(primary_key)] if pipe.get(primary_key) else []
-    return chain + list(pipe.get(fallback_key) or [])
+    chain = ([pipe.get(primary_key)] if pipe.get(primary_key) else []) + list(pipe.get(fallback_key) or [])
+    return [c for c in chain if configured(c.get("provider", ""))]
 
 
 def _fallbacks_for(side: dict) -> list[dict]:
@@ -268,7 +269,10 @@ def _answer(side: dict, prompt: str, files, deadline: Deadline, purpose: str):
 
 
 def _utility_json(run: Run, purpose: str, prompt: str, deadline: Deadline) -> dict | None:
-    for cfg in _chain("utility", "utility_fallbacks"):
+    chain = _chain("utility", "utility_fallbacks")
+    if not chain:
+        run.record("error", where=purpose, kind="not_configured", detail="no utility model has its key set")
+    for cfg in chain:
         try:
             raw = ask(cfg["provider"], cfg["model"], cfg.get("effort", "off"), prompt, deadline=deadline,
                       purpose=purpose)["text"]
@@ -298,7 +302,10 @@ def _merge(run: Run, question: str, settled, comp, ruling_block: str, deadline: 
     prompt = MERGE_PROMPT.format(question=question, agreements=_fmt_list(settled),
                                  unique_a=_fmt_list(comp.get("unique_a", [])),
                                  unique_b=_fmt_list(comp.get("unique_b", [])), ruling_block=ruling_block)
-    for cfg in _chain("utility", "utility_fallbacks"):
+    chain = _chain("utility", "utility_fallbacks")
+    if not chain:
+        run.record("error", where="merge", kind="not_configured", detail="no utility model has its key set")
+    for cfg in chain:
         try:
             return ask(cfg["provider"], cfg["model"], cfg.get("effort", "off"), prompt, deadline=deadline,
                        purpose="merge")["text"]
@@ -369,7 +376,10 @@ def _judge(run: Run, question: str, conflicts, a: str, b: str, deadline: Deadlin
     first, second = (b, a) if flip else (a, b)
     prompt = JUDGE_PROMPT.format(question=question, conflicts=_fmt_judge_points(conflicts, flip),
                                  a=first, b=second)
-    for cfg in _chain("judge", "judge_fallbacks"):
+    chain = _chain("judge", "judge_fallbacks")
+    if not chain:
+        run.record("error", where="judge", kind="not_configured", detail="no judge model has its key set")
+    for cfg in chain:
         try:
             raw = ask(cfg["provider"], cfg["model"], cfg.get("effort", "high"), prompt, deadline=deadline,
                       purpose="judge")["text"]

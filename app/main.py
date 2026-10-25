@@ -25,7 +25,6 @@ from .config import VERSION, cfg, pipeline_setting, registry
 from .lifecycle import INSTANCE_ID, LIFECYCLE
 from .orchestrator import run_pipeline
 from .providers import EFFORTS, enabled_providers, health
-from .secretstore import try_secret
 
 log = logging.getLogger("crossfact")
 BASE = os.path.dirname(__file__)
@@ -39,12 +38,7 @@ CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self'; script-src '
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     db.init_db()
-    if not db.all_users():  # first boot: create the admin from the Vault-held bootstrap password
-        pw = try_secret("admin_bootstrap_password")
-        if not pw:
-            log.warning("admin_bootstrap_password is not set; using an insecure default. Set it in Vault.")
-            pw = "change-me-now"
-        db.create_user("admin", auth.hash_pw(pw), role="admin")
+    auth.ensure_owner()  # single-user: one account, created from the Vault-held bootstrap password
     tm.BUILD.info({"version": VERSION, "instance": INSTANCE_ID})
     orchestrator.prime_metrics()  # every bounded series at zero, so increase() sees the first event
     providers.prime_metrics()
@@ -120,8 +114,9 @@ def page(request: Request, name: str, s=None, status_code=200, **ctx):
     return templates.TemplateResponse(request, name, ctx, status_code=status_code)
 
 
-def quota_for(user: dict) -> int:
-    return cfg()["quotas"]["admin_daily_runs" if user["role"] == "admin" else "user_daily_runs"]
+def daily_quota() -> int:
+    q = cfg()["quotas"]
+    return int(q.get("daily_runs") or q.get("admin_daily_runs") or 200)
 
 
 def ui_registry() -> list[dict]:
@@ -248,7 +243,7 @@ def chat(request: Request, tid: str | None = None):
             "efforts": EFFORTS}
     return page(request, "chat.html", s=s, threads=db.user_threads(s["user_id"]), thread=thread, msgs=msgs,
                 efforts=EFFORTS, files=db.user_files(s["user_id"]), used=db.usage_today(s["user_id"]),
-                quota=quota_for(s["user"]), boot=boot)
+                quota=daily_quota(), boot=boot)
 
 
 def _history_text(tid: str) -> str:
@@ -304,7 +299,7 @@ def ask_route(request: Request,
         raise HTTPException(400, "bad mode or effort")
     if mode != "single" and not (b_provider and b_model):
         raise HTTPException(400, "side B is required for consensus and union modes")
-    if db.usage_today(s["user_id"]) >= quota_for(s["user"]):
+    if db.usage_today(s["user_id"]) >= daily_quota():
         raise HTTPException(429, "Daily run quota reached. It resets at midnight.")
     question = question.strip()[:20000]
     if not question:
@@ -428,47 +423,13 @@ def _admin_page(request, s, msg=None, error=None):
     for pid, p in enabled_providers().items():
         provider_targets.append(pid)
         provider_targets += [f"{pid}/{m['id']}" for m in p.get("models", [])]
-    return page(request, "admin.html", s=s, users=db.all_users(), msg=msg, error=error,
+    return page(request, "admin.html", s=s, msg=msg, error=error, providers=ui_registry(),
                 fault_modes=faults.MODES, fault_targets=provider_targets, active_faults=db.active_faults())
 
 
 @app.get("/admin", response_class=HTMLResponse)
 def admin_page(request: Request):
     return _admin_page(request, admin_guard(request))
-
-
-@app.post("/admin/users")
-def admin_create(request: Request, username: str = Form(...), password: str = Form(...),
-                 role: str = Form("user"), csrf: str = Form(...)):
-    s = admin_guard(request)
-    check_csrf(s, csrf)
-    username = username.strip().lower()
-    if not re.fullmatch(r"[a-z0-9._-]{2,32}", username):
-        return _admin_page(request, s, error="Usernames are 2-32 characters: letters, digits, dot, dash, underscore.")
-    if db.get_user(username=username):
-        return _admin_page(request, s, error="That username already exists.")
-    if len(password) < 10:
-        return _admin_page(request, s, error="The temporary password needs at least 10 characters.")
-    db.create_user(username, auth.hash_pw(password), role="admin" if role == "admin" else "user")
-    return _admin_page(request, s, msg=f"Created {username}. They set up two-factor at first sign-in.")
-
-
-@app.post("/admin/users/{uid}/toggle")
-def admin_toggle(request: Request, uid: str, csrf: str = Form(...)):
-    s = admin_guard(request)
-    check_csrf(s, csrf)
-    u = db.get_user(uid=uid)
-    if u and u["id"] != s["user_id"]:
-        db.update_user(uid, disabled=0 if u["disabled"] else 1)
-    return RedirectResponse("/admin", status_code=303)
-
-
-@app.post("/admin/users/{uid}/reset2fa")
-def admin_reset2fa(request: Request, uid: str, csrf: str = Form(...)):
-    s = admin_guard(request)
-    check_csrf(s, csrf)
-    db.update_user(uid, totp_secret_enc=None)
-    return RedirectResponse("/admin", status_code=303)
 
 
 @app.post("/admin/faults")

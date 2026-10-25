@@ -1,18 +1,20 @@
-"""Secret access behind one function, three backends.
+"""Secret access behind one function, two backends.
 
   file  -> /var/run/secrets/crossfact/<name>, a Kubernetes Secret volume that
            External Secrets Operator fills from OCI Vault. Re-read every 60 s,
            so a rotated secret (say, next year's Claude token) is picked up
            without a restart.
   env   -> environment variables (laptop development, tests).
-  vault -> OCI Vault through the VM's instance principal (non-Kubernetes VM).
+
+The app never talks to Vault itself: that would mean acting as the VM, and
+nothing in the app's namespace may (the deploy repo's network and admission
+policies enforce it).
 
 Terraform creates every secret in Vault up front with a placeholder value, so
 "missing" and "placeholder" mean the same thing here: not configured yet.
 """
 from __future__ import annotations
 
-import base64
 import os
 import threading
 import time
@@ -20,7 +22,7 @@ import time
 from .config import cfg
 
 PLACEHOLDERS = {"", "unset", "set-me", "placeholder", "changeme", "change-me"}
-_TTL = {"file": 60.0, "env": float("inf"), "vault": 300.0}
+_TTL = {"file": 60.0, "env": float("inf")}
 
 _cache: dict[str, tuple[float, str]] = {}
 _lock = threading.Lock()
@@ -52,22 +54,6 @@ def _from_env(name: str) -> str | None:
     return os.environ.get(name.upper()) or os.environ.get(name)
 
 
-def _from_vault(name: str) -> str:
-    import oci  # lazy: only the VM backend needs the SDK at runtime
-
-    signer = oci.auth.signers.InstancePrincipalsSecurityTokenSigner()
-    client = oci.secrets.SecretsClient(config={}, signer=signer)
-    if cfg()["oci"].get("region"):
-        client.base_client.set_region(cfg()["oci"]["region"])
-    try:
-        bundle = client.get_secret_bundle_by_name(secret_name=name, vault_id=cfg()["oci"]["vault_id"]).data
-    except oci.exceptions.ServiceError as e:
-        if e.status == 404:
-            raise SecretNotFound(name) from e
-        raise
-    return base64.b64decode(bundle.secret_bundle_content.content).decode()
-
-
 def get_secret(name: str) -> str:
     mode = cfg()["secrets_mode"]
     now = time.monotonic()
@@ -79,8 +65,6 @@ def get_secret(name: str) -> str:
         raw = _from_file(name)
     elif mode == "env":
         raw = _from_env(name)
-    elif mode == "vault":
-        raw = _from_vault(name)
     else:
         raise RuntimeError(f"unknown secrets_mode {mode!r}")
     value = _clean(name, raw)

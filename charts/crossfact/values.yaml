@@ -27,7 +27,7 @@ persistence:
 # Rendered into /etc/crossfact/config.yaml.
 config:
   uploads: {retention_days: 30, max_mb: 25}
-  quotas: {user_daily_runs: 40, admin_daily_runs: 200}
+  quotas: {daily_runs: 200}    # one account; caps a runaway script or a stolen session
   session_hours: 72
 
 # Full replacement for providers.yaml. Empty = the registry baked into the image

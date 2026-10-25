@@ -8,6 +8,9 @@
   session means deleting the row. The CSRF token rides on the session.
 - Lockout: 5 failures per username, per IP, or per TOTP user -> 15 minutes.
   Cloudflare's edge rate limit is the outer layer; this is the inner one.
+- One account: Crossfact is single-user (each person deploys their own copy with
+  their own keys). ensure_owner() keeps it that way; app/admin.py is the
+  recovery tool (reset two-factor, set a password, clear a lockout).
 
 The field-encryption key may be a ready-made Fernet key or any random secret
 material (for example bytes that OCI Vault generated itself). Anything that is
@@ -19,6 +22,7 @@ from __future__ import annotations
 import base64
 import binascii
 import io
+import logging
 
 import pyotp
 import qrcode
@@ -32,7 +36,10 @@ from itsdangerous import BadSignature, URLSafeSerializer
 
 from . import db
 from .config import cfg
-from .secretstore import get_secret
+from .secretstore import get_secret, try_secret
+
+log = logging.getLogger("crossfact.auth")
+OWNER_DEFAULT_USERNAME = "admin"
 
 _ph = PasswordHasher()
 COOKIE = "crossfact_session"
@@ -114,3 +121,33 @@ def read_session(cookie_val: str | None) -> dict | None:
     except BadSignature:
         return None
     return db.get_session(sid)
+
+
+# ---- the one account ------------------------------------------------------------------
+
+def ensure_owner() -> dict:
+    """Exactly one account can sign in: the owner.
+
+    An empty database gets one named "admin", with the Vault-held bootstrap
+    password (rename it with `python -m app.admin rename`). A database from a
+    multi-user version keeps its earliest admin as the owner and disables the
+    others; their chats stay in the database (and backups) until
+    `python -m app.admin purge-others` deletes them."""
+    users = db.all_users()  # oldest first
+    if not users:
+        pw = try_secret("admin_bootstrap_password")
+        if not pw:
+            log.warning("admin_bootstrap_password is not set; using an insecure default. Set it in Vault.")
+            pw = "change-me-now"
+        db.create_user(OWNER_DEFAULT_USERNAME, hash_pw(pw), role="admin")
+        return db.get_user(username=OWNER_DEFAULT_USERNAME)
+    owner = next((u for u in users if u["role"] == "admin" and not u["disabled"]),
+                 next((u for u in users if u["role"] == "admin"), users[0]))
+    if owner["disabled"] or owner["role"] != "admin":
+        db.update_user(owner["id"], disabled=0, role="admin")
+    for u in users:
+        if u["id"] != owner["id"] and not u["disabled"]:
+            db.update_user(u["id"], disabled=1)
+            log.warning("single-user: disabled account %r from an earlier multi-user version (its data is kept; "
+                        "python -m app.admin purge-others deletes it)", u["username"])
+    return db.get_user(uid=owner["id"])

@@ -51,6 +51,15 @@ jobs:
         with: {python-version: "${{ env.PYTHON_VERSION }}"}
       - run: pip install --require-hashes -r requirements.txt -r requirements-dev.txt
       - run: pytest -q
+      - name: The pinned Claude Code CLI still takes our flags and reads the token
+        # Installed with the same Node image as the Dockerfile's build stage; only the
+        # native binary comes out. The check never reaches the internet (localhost proxy).
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD/image:/src:ro" -v "$RUNNER_TEMP:/out" -w /tmp node:22-bookworm-slim \
+            sh -c 'cp /src/package.json /src/package-lock.json . && npm ci --omit=dev --no-audit --no-fund >/dev/null \
+                   && cp node_modules/@anthropic-ai/claude-code/bin/claude.exe /out/claude'
+          python scripts/check_claude_cli.py --bin "$RUNNER_TEMP/claude"
 
   chart:
     runs-on: ubuntu-24.04
@@ -160,6 +169,10 @@ jobs:
           provenance: mode=max
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: The CLI in the image still reads the token (no network)
+        env:
+          REF: ${{ steps.name.outputs.image }}@${{ steps.push.outputs.digest }}
+        run: docker run --rm --network none --entrypoint python "$REF" scripts/check_claude_cli.py
       - name: Gate on fixable critical CVEs before signing
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

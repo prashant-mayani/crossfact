@@ -8,13 +8,13 @@ metrics + an OpenTelemetry span. Adapters only translate one request and
 classify failures into resilience.ErrorKind.
 
 Kinds:
-  claude_cli  Claude Code in print mode, authenticated with your Pro/Max token
-              (CLAUDE_CODE_OAUTH_TOKEN). Runs with --restricted, dontAsk
+  claude_cli  Claude Code in print mode, signed in with your own subscription's
+              token (CLAUDE_CODE_OAUTH_TOKEN): Crossfact is single-user, so the
+              plan serves only the person it belongs to. Runs with --restricted, dontAsk
               permissions, reads confined to a fresh per-run directory holding
               only that run's files, and an environment that contains its own
               token and nothing else.
   gemini_api  generativelanguage.googleapis.com generateContent; key in a header.
-  gemini_cli  Gemini CLI with the one-time OAuth login (optional second pool).
   openai      any OpenAI-compatible endpoint (Groq, OpenRouter, Cerebras, ...).
 
 Effort is one dial (off/low/medium/high/max) translated per backend: Claude's
@@ -66,18 +66,17 @@ TEXT_EXT = (".txt", ".md", ".csv", ".json", ".log", ".py", ".yaml", ".yml")
 MAX_INLINE_TEXT = 120_000
 MAX_INLINE_BINARY = 14 * 1024 * 1024  # stays under Gemini's ~20 MB request cap after base64
 
-DEFAULT_TIMEOUT_S = {"claude_cli": 300, "gemini_cli": 300, "gemini_api": 180, "openai": 120}
+DEFAULT_TIMEOUT_S = {"claude_cli": 300, "gemini_api": 180, "openai": 120}
 # Claude Code already retries transient API errors internally, so one outer retry is plenty.
 DEFAULT_RETRY = {
     "claude_cli": {"max_attempts": 2, "base_delay_s": 3.0, "max_delay_s": 30.0},
-    "gemini_cli": {"max_attempts": 2, "base_delay_s": 3.0, "max_delay_s": 30.0},
     "gemini_api": {"max_attempts": 3, "base_delay_s": 1.5, "max_delay_s": 30.0},
     "openai": {"max_attempts": 3, "base_delay_s": 1.0, "max_delay_s": 20.0},
 }
 
 # Claude Code reads are fenced to the run directory twice over: the setting
 # below refuses reads outside the working directory in every permission mode,
-# and the deny rules name the places a secret or another user's data could be.
+# and the deny rules name the places a secret or the app's data could be.
 CLAUDE_DENY = [f"Read(//{p}/**)" for p in ("proc", "sys", "run", "var", "data", "etc", "home", "root", "app",
                                            "opt", "usr")]
 CLAUDE_SETTINGS = {"permissions": {"blockReadsOutsideWorkingDirectories": True, "deny": CLAUDE_DENY}}
@@ -106,6 +105,14 @@ def provider_cfg(pid: str) -> dict:
 
 def enabled_providers() -> dict:
     return {k: v for k, v in registry()["providers"].items() if v.get("enabled")}
+
+
+def configured(pid: str) -> bool:
+    """Enabled, and its key (if it needs one) is set. Fallback chains skip the rest, so
+    an optional provider you haven't signed up for costs nothing and never looks like
+    an authentication failure."""
+    p = registry()["providers"].get(pid) or {}
+    return bool(p.get("enabled")) and (not p.get("secret") or try_secret(p["secret"]) is not None)
 
 
 def model_cfg(p: dict, model: str) -> dict:
@@ -175,7 +182,7 @@ def _retry_after_header(resp: httpx.Response) -> float | None:
         return None
 
 
-# ---- subprocess plumbing (Claude / Gemini CLIs) ----------------------------------------
+# ---- subprocess plumbing (Claude Code CLI) --------------------------------------------
 
 def _kill_group(proc: subprocess.Popen) -> None:
     for sig, wait in ((signal.SIGTERM, 5), (signal.SIGKILL, 5)):
@@ -225,6 +232,13 @@ def _cli_env(**extra: str) -> dict:
 
 # ---- claude_cli ----------------------------------------------------------------------------
 
+# Claude Code in --bare mode skips CLAUDE_CODE_OAUTH_TOKEN, and its docs say -p will
+# default to bare in a future release. That would look like this, with a token set.
+BARE_MODE_HINT = ("Claude Code said it is not logged in although a token is configured: this Claude Code "
+                  "version ignores CLAUDE_CODE_OAUTH_TOKEN (newer releases may run -p in --bare mode, which "
+                  "skips it). Keep the previous version in image/package.json until the adapter is updated; "
+                  "scripts/check_claude_cli.py checks this in CI.")
+
 def claude_command(p: dict, model: str, effort: str | None, has_files: bool) -> list[str]:
     cmd = [p.get("bin", "claude"), "-p", "--restricted", "--output-format", "json", "--model", model,
            "--permission-mode", "dontAsk", "--no-session-persistence",
@@ -237,18 +251,23 @@ def claude_command(p: dict, model: str, effort: str | None, has_files: bool) -> 
     return cmd
 
 
-def _ask_claude_cli(p, model, effort, prompt, files, timeout):
-    token = try_secret(p.get("secret", "claude_oauth_token"))
-    if not token:
-        raise ProviderError("Claude token is not configured (claude_oauth_token)", ErrorKind.AUTH)
-    env = _cli_env(
+def claude_env(token: str, **extra: str) -> dict:
+    return _cli_env(
         CLAUDE_CODE_OAUTH_TOKEN=token,
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",
         DISABLE_AUTOUPDATER="1",
         DISABLE_UPDATES="1",
         CLAUDE_CODE_DISABLE_CLAUDE_MDS="1",
         CLAUDE_CODE_DISABLE_TERMINAL_TITLE="1",
+        **extra,
     )
+
+
+def _ask_claude_cli(p, model, effort, prompt, files, timeout):
+    token = try_secret(p.get("secret", "claude_oauth_token"))
+    if not token:
+        raise ProviderError("Claude token is not configured (claude_oauth_token)", ErrorKind.AUTH)
+    env = claude_env(token)
     workdir = _run_dir_with(files)
     if files:
         names = ", ".join(os.path.basename(f) for f in files)
@@ -272,6 +291,8 @@ def _ask_claude_cli(p, model, effort, prompt, files, timeout):
     if isinstance(payload, dict) and not payload.get("is_error") and code == 0:
         return str(payload.get("result") or "")
     detail = (payload.get("result") if isinstance(payload, dict) else None) or err or out or f"exit {code}"
+    if "not logged in" in str(detail).lower():
+        raise ProviderError(f"claude: {str(detail)[:200]}. {BARE_MODE_HINT}", ErrorKind.AUTH)
     raise ProviderError(f"claude: {str(detail)[:400]}", classify_text(str(detail)))
 
 
@@ -359,24 +380,6 @@ def _ask_gemini_api(p, model, effort, prompt, files, timeout):
     return text
 
 
-# ---- gemini_cli ----------------------------------------------------------------------------------
-
-def _ask_gemini_cli(p, model, effort, prompt, files, timeout):
-    home = p.get("home") or os.path.join(os.environ.get("CROSSFACT_DATA_DIR", "/data"), "gemini-home")
-    workdir = _run_dir_with(files)
-    if files:
-        prompt = " ".join(f"@{os.path.basename(f)}" for f in files) + "\n" + prompt
-    try:
-        code, out, err = run_cli([p.get("bin", "gemini"), "-m", model, "-p", prompt], stdin_text=None,
-                                 env=_cli_env(HOME=home), cwd=workdir, timeout=timeout)
-    finally:
-        shutil.rmtree(workdir, ignore_errors=True)
-    if code != 0:
-        detail = (err or out)[:400]
-        raise ProviderError(f"gemini-cli: {detail}", classify_text(detail))
-    return out
-
-
 # ---- openai-compatible ------------------------------------------------------------------------------
 
 def _ask_openai(p, model, effort, prompt, files, timeout):
@@ -410,8 +413,7 @@ def _ask_openai(p, model, effort, prompt, files, timeout):
         raise ProviderError(f"{p.get('label')}: unexpected response shape", ErrorKind.SERVER) from None
 
 
-ADAPTERS = {"claude_cli": _ask_claude_cli, "gemini_api": _ask_gemini_api, "gemini_cli": _ask_gemini_cli,
-            "openai": _ask_openai}
+ADAPTERS = {"claude_cli": _ask_claude_cli, "gemini_api": _ask_gemini_api, "openai": _ask_openai}
 
 
 # ---- the call surface ------------------------------------------------------------------------------------
@@ -512,14 +514,9 @@ def prime_metrics() -> None:
 def health(pid: str) -> dict:
     """What the UI shows next to a provider: configured? which breakers are open?"""
     p = registry()["providers"].get(pid, {})
-    if p.get("kind") == "gemini_cli":
-        home = p.get("home") or os.path.join(os.environ.get("CROSSFACT_DATA_DIR", "/data"), "gemini-home")
-        configured = os.path.exists(os.path.join(home, ".gemini"))
-    else:
-        configured = not p.get("secret") or try_secret(p["secret"]) is not None
     circuits = {}
     for m in p.get("models", []):
         b = BREAKERS.all().get(f"{pid}/{m['id']}")
         if b is not None:
             circuits[m["id"]] = b.snapshot()
-    return {"configured": configured, "circuits": circuits}
+    return {"configured": configured(pid), "circuits": circuits}
