@@ -11,6 +11,9 @@
   rename <name>     change the username (2-32: letters, digits, dot, dash, underscore)
   purge-others      delete accounts left over from a multi-user version, with
                     their chats and files (asks first; --yes to skip)
+  check-keys        send each provider with a key one tiny prompt and report
+                    what came back (uses a sliver of each free quota; Claude's
+                    counts against your plan's usage like any message)
 
 Getting here already took the admin tunnel (Cloudflare Access) and the
 cluster's client certificate, so this is the recovery path for a lost phone.
@@ -140,6 +143,34 @@ def purge_others(args) -> int:
     return 0
 
 
+def check_keys(args) -> int:
+    from . import providers
+    from .config import registry
+    from .resilience import ProviderError
+
+    failed = 0
+    for pid, p in providers.enabled_providers().items():
+        models = p.get("models") or []
+        if not models:
+            continue
+        if not providers.configured(pid):
+            print(f"  -     {p.get('label', pid)}: no key set ({p.get('secret')}), skipped by every chain")
+            continue
+        model = args.model.get(pid) if args.model else None
+        model = model or models[0]["id"]
+        t0 = time.monotonic()
+        try:
+            text = providers.ADAPTERS[p["kind"]](p, model, "low", "Reply with the single word OK.", None, 60)
+            print(f"  ok    {p.get('label', pid)} {model}: {text.strip()[:40]!r} in {time.monotonic() - t0:.1f}s")
+        except ProviderError as e:
+            failed += 1
+            print(f"  FAIL  {p.get('label', pid)} {model}: {e.kind.value}: {e.short()}")
+    judge = registry()["pipeline"].get("judge") or {}
+    if judge and not providers.configured(judge.get("provider", "")):
+        print(f"note: the default judge ({judge.get('provider')}) has no key; rulings come from a fallback")
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m app.admin", description="Recovery for the one Crossfact account.")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -155,7 +186,13 @@ def main(argv: list[str] | None = None) -> int:
     po = sub.add_parser("purge-others")
     po.add_argument("--yes", action="store_true")
     po.set_defaults(fn=purge_others)
+    ck = sub.add_parser("check-keys")
+    ck.add_argument("--model", action="append", default=[], metavar="PROVIDER=MODEL",
+                    help="which model to try for a provider (default: its first)")
+    ck.set_defaults(fn=check_keys)
     args = ap.parse_args(argv)
+    if args.cmd == "check-keys":
+        args.model = dict(m.split("=", 1) for m in args.model if "=" in m)
     return args.fn(args)
 
 

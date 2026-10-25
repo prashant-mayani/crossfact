@@ -32,6 +32,7 @@ import os
 import re
 import shutil
 import signal
+import string
 import subprocess
 import tempfile
 import time
@@ -40,7 +41,7 @@ import httpx
 
 from . import faults
 from . import telemetry as tm
-from .config import pipeline_setting, registry
+from .config import cfg, pipeline_setting, registry
 from .resilience import (
     BREAKERS,
     RETRYABLE,
@@ -60,7 +61,11 @@ CLAUDE_EFFORT = {"off": "low", "low": "low", "medium": "medium", "high": "high",
 GEMINI_LEVELS = ["minimal", "low", "medium", "high"]
 GEMINI_LEVEL = {"off": "minimal", "low": "low", "medium": "medium", "high": "high", "max": "high"}
 GEMINI_25_BUDGET = {"off": 0, "low": 2048, "medium": 8192, "high": 16384, "max": -1}
-OPENAI_EFFORT = {"off": None, "low": "low", "medium": "medium", "high": "high", "max": "high"}
+# reasoning_effort for OpenAI-style APIs. A provider lists the levels its model takes
+# (reasoning_efforts); effort is clamped to the nearest, so GPT-OSS, which can't
+# turn reasoning off, gets "low" for "off".
+OPENAI_LEVELS = ["minimal", "low", "medium", "high"]
+OPENAI_WANT = {"off": "minimal", "low": "low", "medium": "medium", "high": "high", "max": "high"}
 
 TEXT_EXT = (".txt", ".md", ".csv", ".json", ".log", ".py", ".yaml", ".yml")
 MAX_INLINE_TEXT = 120_000
@@ -108,11 +113,30 @@ def enabled_providers() -> dict:
 
 
 def configured(pid: str) -> bool:
-    """Enabled, and its key (if it needs one) is set. Fallback chains skip the rest, so
-    an optional provider you haven't signed up for costs nothing and never looks like
-    an authentication failure."""
+    """Enabled, its key (if it needs one) set, and its base URL complete. Fallback chains
+    skip the rest, so an optional provider you haven't signed up for costs nothing and
+    never looks like an authentication failure."""
     p = registry()["providers"].get(pid) or {}
-    return bool(p.get("enabled")) and (not p.get("secret") or try_secret(p["secret"]) is not None)
+    if not p.get("enabled") or (p.get("secret") and try_secret(p["secret"]) is None):
+        return False
+    try:
+        base_url(p)
+    except ProviderError:
+        return False
+    return True
+
+
+def base_url(p: dict) -> str:
+    """The provider's base URL with {placeholders} filled from config provider_vars
+    (non-secret values such as a Cloudflare account ID; chart value providerVars)."""
+    raw = p.get("base_url") or ""
+    names = [f for _, f, _, _ in string.Formatter().parse(raw) if f]
+    values = cfg().get("provider_vars") or {}
+    missing = [n for n in names if not values.get(n)]
+    if missing:
+        raise ProviderError(f"{p.get('label', 'provider')} base_url needs provider_vars.{missing[0]} "
+                            "(chart value providerVars)", ErrorKind.BAD_REQUEST)
+    return raw.format_map(values).rstrip("/")
 
 
 def model_cfg(p: dict, model: str) -> dict:
@@ -139,8 +163,8 @@ def cli_home() -> str:
 # Order matters: the first match wins. "Per day" style limits are quota
 # exhaustion (wait hours); "per minute" limits are ordinary rate limiting.
 _PATTERNS = [
-    (ErrorKind.QUOTA_EXHAUSTED, r"usage limit|per ?day|\brpd\b|daily (limit|quota)|insufficient_quota|"
-                                r"exceeded your current quota|credit balance"),
+    (ErrorKind.QUOTA_EXHAUSTED, r"usage limit|per ?day|\brpd\b|\btpd\b|daily (limit|quota|free)|insufficient_quota|"
+                                r"exceeded your current quota|credit balance|free allocation|neurons"),
     (ErrorKind.RATE_LIMITED, r"rate.?limit|\b429\b|too many requests|resource.?exhausted"),
     (ErrorKind.AUTH, r"authenticat|unauthori[sz]ed|\b401\b|\b403\b|invalid (api )?key|api key not valid|"
                      r"oauth|token (has )?expired|forbidden|account_on_hold|billing|permission.?denied|/login"),
@@ -382,7 +406,27 @@ def _ask_gemini_api(p, model, effort, prompt, files, timeout):
 
 # ---- openai-compatible ------------------------------------------------------------------------------
 
+def openai_effort(p: dict, effort: str) -> str | None:
+    if not p.get("supports_reasoning_effort"):
+        return None
+    levels = [lvl for lvl in OPENAI_LEVELS if lvl in (p.get("reasoning_efforts") or ["low", "medium", "high"])]
+    want = OPENAI_LEVELS.index(OPENAI_WANT.get(effort, "medium"))
+    return min(levels, key=lambda lvl: (abs(OPENAI_LEVELS.index(lvl) - want), -OPENAI_LEVELS.index(lvl)))
+
+
+def _responses_text(data: dict) -> str:
+    """Text of an OpenAI Responses API result: the message parts, not the reasoning."""
+    if isinstance(data.get("result"), dict):  # Cloudflare's envelope, if present
+        data = data["result"]
+    if isinstance(data.get("output_text"), str) and data["output_text"].strip():
+        return data["output_text"]
+    return "\n".join(part.get("text", "") for item in data.get("output") or [] if item.get("type") == "message"
+                     for part in item.get("content") or [] if part.get("type") in ("output_text", "text"))
+
+
 def _ask_openai(p, model, effort, prompt, files, timeout):
+    """Chat Completions (Groq, OpenRouter, ...) or, with api: responses, the Responses
+    API (how Workers AI serves GPT-OSS)."""
     key = try_secret(p["secret"]) if p.get("secret") else ""
     if p.get("secret") and not key:
         raise ProviderError(f"{p.get('label', 'provider')} key is not configured ({p['secret']})", ErrorKind.AUTH)
@@ -390,27 +434,43 @@ def _ask_openai(p, model, effort, prompt, files, timeout):
         if f.lower().endswith(TEXT_EXT):
             with open(f, encoding="utf-8", errors="replace") as fh:
                 prompt = f"[file {os.path.basename(f)}]\n{fh.read()[:MAX_INLINE_TEXT]}\n\n" + prompt
-    body = {"model": model, "messages": [{"role": "user", "content": prompt}]}
-    level = OPENAI_EFFORT.get(effort)
-    if level and p.get("supports_reasoning_effort"):
-        body["reasoning_effort"] = level
+    responses_api = p.get("api") == "responses"
+    level = openai_effort(p, effort)
+    if responses_api:
+        url = f"{base_url(p)}/responses"
+        body = {"model": model, "input": [{"role": "user", "content": prompt}]}
+        if level:
+            body["reasoning"] = {"effort": level}
+    else:
+        url = f"{base_url(p)}/chat/completions"
+        body = {"model": model, "messages": [{"role": "user", "content": prompt}]}
+        if level:
+            body["reasoning_effort"] = level
+    temperature = model_cfg(p, model).get("temperature")
+    if temperature is not None:
+        body["temperature"] = temperature
     try:
-        resp = httpx.post(f"{p['base_url'].rstrip('/')}/chat/completions",
-                          headers={"Authorization": f"Bearer {key}"} if key else {}, json=body, timeout=timeout)
+        resp = httpx.post(url, headers={"Authorization": f"Bearer {key}"} if key else {}, json=body,
+                          timeout=timeout)
     except httpx.TimeoutException:
         raise ProviderError(f"{p.get('label')} timed out after {timeout:.0f}s", ErrorKind.TIMEOUT) from None
     except httpx.TransportError as e:
         raise ProviderError(f"{p.get('label')} network error: {type(e).__name__}", ErrorKind.NETWORK) from None
     if resp.status_code != 200:
         kind = classify_status(resp.status_code)
-        if kind is ErrorKind.RATE_LIMITED and classify_text(resp.text) is ErrorKind.QUOTA_EXHAUSTED:
+        if kind in (ErrorKind.RATE_LIMITED, ErrorKind.BAD_REQUEST, ErrorKind.UNKNOWN) \
+                and classify_text(resp.text) is ErrorKind.QUOTA_EXHAUSTED:
             kind = ErrorKind.QUOTA_EXHAUSTED
         raise ProviderError(f"{p.get('label')} {resp.status_code}: {resp.text[:300]}", kind,
                             retry_after=_retry_after_header(resp), status=resp.status_code)
     try:
-        return resp.json()["choices"][0]["message"]["content"] or ""
-    except (KeyError, IndexError, ValueError):
+        data = resp.json()
+        text = _responses_text(data) if responses_api else (data["choices"][0]["message"]["content"] or "")
+    except (KeyError, IndexError, ValueError, TypeError, AttributeError):
         raise ProviderError(f"{p.get('label')}: unexpected response shape", ErrorKind.SERVER) from None
+    if not text.strip():
+        raise ProviderError(f"{p.get('label')} returned an empty answer", ErrorKind.SERVER)
+    return text
 
 
 ADAPTERS = {"claude_cli": _ask_claude_cli, "gemini_api": _ask_gemini_api, "openai": _ask_openai}

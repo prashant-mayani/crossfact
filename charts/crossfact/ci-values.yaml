@@ -8,3 +8,5 @@ backup:
   auth:
     tenancy: ocid1.tenancy.oc1..aaaaaaaaexample
     user: ocid1.user.oc1..aaaaaaaaexample
+providerVars:
+  cloudflare_account_id: 0123456789abcdef0123456789abcdef

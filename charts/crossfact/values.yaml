@@ -34,6 +34,11 @@ config:
 # (config/providers.example.yaml).
 providers: {}
 
+# Non-secret values the registry's base URLs refer to, e.g. {cloudflare_account_id}
+# in Workers AI's. A provider whose URL needs a missing one is skipped.
+providerVars: {}
+#   cloudflare_account_id: 0123456789abcdef0123456789abcdef
+
 # Whole-run time budget. The pod's grace period must outlast it so a deploy
 # never cuts a run short; the chart refuses to render if it doesn't.
 runDeadlineSeconds: 600
@@ -44,8 +49,10 @@ secrets:
     enabled: true
     storeRef: {kind: ClusterSecretStore, name: oci-vault}
     refreshInterval: 1h
-    keys: [claude_oauth_token, gemini_api_key, session_secret, field_encryption_key, admin_bootstrap_password]
-    extraKeys: []        # e.g. [groq_api_key] when you enable that provider
+    # Each must exist in Vault (the deploy repo creates them all; an unused one stays "UNSET").
+    keys: [claude_oauth_token, gemini_api_key, groq_api_key, cloudflare_ai_token, session_secret,
+           field_encryption_key, admin_bootstrap_password]
+    extraKeys: []        # e.g. [openrouter_api_key] when you enable that provider
   existingSecret: ""     # for clusters without ESO: a plain Secret with the same keys
 
 backup:

@@ -30,9 +30,16 @@ question ─┬─▶ side A answers ─┐
   fixed and argues only the open topics. Rounds stop at three, or earlier when
   the remaining time budget couldn't fit another round plus the judge and merge
   (`reserve_judge_s`, `reserve_merge_s`).
-- **The judge doesn't know who is who.** Positions are presented as A/B in a
-  random order and the ruling is mapped back, so a judge from the same family
-  as one side can't favour it by name.
+- **The judge is a third family and doesn't know who is who.** By default it is
+  GPT-OSS 120B (OpenAI's open-weight model), which argued neither side, on
+  Groq's free tier, with the same weights on Workers AI as the fallback. The two
+  answers are shown as A and B in a random order; each contested point is
+  numbered and labelled the same way ("Answer A says ..."), and each ruling is
+  matched back by number. Only if both GPT-OSS hosts fail does a side's own
+  family judge, and the transcript says so.
+- **Rulings carry their content.** The merge receives the ruled-correct position
+  itself for each point (and both positions for an "unverified" one), not a
+  side letter it would have no way to look up.
 - **The answer is a union, not a vote**: everything both agreed on, each side's
   unique points, and the judge's rulings, merged by the utility model.
 
@@ -70,20 +77,30 @@ adding an OpenAI-compatible provider is one block plus a secret.
 
 | kind | how | effort becomes |
 |---|---|---|
-| `claude_cli` | Claude Code in print mode, with your Pro/Max token | `--effort low/medium/high/max` ("off" maps to low: current Claude models can't turn thinking off) |
+| `claude_cli` | Claude Code in print mode, with your own subscription's token | `--effort low/medium/high/max` ("off" maps to low: current Claude models can't turn thinking off) |
 | `gemini_api` | `generateContent`, key in the `x-goog-api-key` header | Gemini 3.x `thinkingLevel`, clamped to the levels each model accepts; Gemini 2.5 `thinkingBudget` |
-| `gemini_cli` | Gemini CLI with its one-time OAuth login | the CLI's defaults |
-| `openai` | any OpenAI-compatible endpoint | `reasoning_effort` where supported |
+| `openai` | any OpenAI-compatible endpoint: Chat Completions (Groq), or the Responses API with `api: responses` (how Workers AI serves GPT-OSS) | `reasoning_effort`, clamped to the levels the provider lists (GPT-OSS can't turn reasoning off, so "off" is sent as low) |
+
+A provider whose key isn't set is skipped by every fallback chain and shown as
+"key missing": an optional provider you never signed up for costs nothing and
+never looks like an authentication failure. A base URL may hold placeholders
+filled from non-secret config (`provider_vars`, for Workers AI's account ID).
 
 If the Gemini API rejects a thinking config, the call is retried once without
 it. A 429 is read properly: a `RetryInfo` hint means "per-minute limit, retry
 in N s"; a `QuotaFailure` mentioning a per-day quota means the free daily quota
-is gone, which no retry fixes.
+is gone, which no retry fixes. The same distinction is drawn from the text of
+Groq's limits (tokens per minute vs per day) and Workers AI's daily neurons.
 
 ### Claude Code, locked down
 
-The Claude side runs the real Claude Code CLI so it can use a Pro/Max plan.
-That CLI is an agent that can read files and run tools, so it is fenced in:
+The Claude side runs the real Claude Code CLI, signed in with the owner's own
+subscription token (`claude setup-token`). Crossfact is single-user: each person
+runs their own copy with their own keys, so the plan only ever serves the
+person it belongs to. CI checks every Claude Code version still reads that
+token in print mode (`scripts/check_claude_cli.py`; `--bare` mode, which its
+docs say -p will default to in a future release, skips it). The CLI is an
+agent that can read files and run tools, so it is fenced in:
 
 - `--restricted`, `--permission-mode dontAsk`, `--no-session-persistence`,
   `--disallowedTools "mcp__*"`, `--max-turns` 2 (8 with files)
@@ -198,8 +215,10 @@ leaves runs "running" forever. Each pod refreshes a heartbeat on its runs every
   sessions referenced by a signed cookie (revocable), CSRF tokens, lockout
   after 5 failures per user, per IP or per TOTP (15 min). Cloudflare's edge
   rate limit on `/login` and `/totp` is the outer layer.
-- **Privacy between users**: every thread, message and file query is scoped by
-  owner; admins manage users, not other users' content.
+- **One account**: Crossfact is single-user. Startup keeps exactly one account
+  able to sign in (an older multi-user database keeps its first admin and
+  disables the rest); recovery is `python -m app.admin` through `kubectl exec`,
+  which already took Cloudflare Access and the cluster's client certificate.
 - **Headers**: strict CSP (no inline script; boot data travels as a JSON
   script block), HSTS, `X-Frame-Options: DENY`, same-origin referrers, nosniff.
 - **Secrets**: read from files that External Secrets keeps in sync with OCI

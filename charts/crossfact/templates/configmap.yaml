@@ -42,6 +42,10 @@ data:
     quotas:
       {{- toYaml .Values.config.quotas | nindent 6 }}
     session_hours: {{ .Values.config.session_hours }}
+    {{- with .Values.providerVars }}
+    provider_vars:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
   {{- if .Values.providers }}
   providers.yaml: |
     {{- toYaml .Values.providers | nindent 4 }}

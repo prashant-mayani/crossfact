@@ -93,3 +93,15 @@ def test_totp_codes_still_verify_after_rename(client, admin, cli):
     assert r.status_code == 303
     r = client.post("/totp", data={"code": pyotp.TOTP(secret).now()}, follow_redirects=False)
     assert r.status_code == 303 and re.search("/", r.headers["location"])
+
+
+def test_check_keys_reports_each_provider(cli, llm, capsys, monkeypatch):
+    from app.config import registry
+    from app.resilience import ErrorKind, ProviderError
+
+    monkeypatch.setitem(registry()["providers"]["judge"], "secret", "judge_api_key")  # unset in tests
+    llm.on(provider="beta", error=ProviderError("API key not valid", ErrorKind.AUTH))
+    assert cli("check-keys") == 1
+    out = capsys.readouterr().out
+    assert "ok    Alpha a1" in out and "FAIL  Beta b1: auth" in out
+    assert "Judge: no key set" in out and "the default judge (judge) has no key" in out

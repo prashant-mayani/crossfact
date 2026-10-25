@@ -223,3 +223,98 @@ def test_injected_latency_longer_than_the_timeout_is_a_timeout(llm, monkeypatch)
     with pytest.raises(ProviderError) as e:
         providers.ask("alpha", "a1", "low", "hi", deadline=Deadline(600))
     assert e.value.kind is ErrorKind.TIMEOUT and llm.count(provider="alpha") == 0
+
+
+# ---- OpenAI-compatible: Groq (Chat Completions) and Workers AI (Responses API) ------------------
+
+GROQ = {"label": "Groq", "kind": "openai", "base_url": "https://api.groq.com/openai/v1", "secret": "groq_api_key",
+        "supports_reasoning_effort": True, "enabled": True,
+        "models": [{"id": "openai/gpt-oss-120b", "temperature": 0.3}]}
+WORKERS_AI = {"label": "Workers AI", "kind": "openai", "api": "responses", "enabled": True,
+              "base_url": "https://api.cloudflare.com/client/v4/accounts/{cloudflare_account_id}/ai/v1",
+              "secret": "cloudflare_ai_token", "supports_reasoning_effort": True,
+              "models": [{"id": "@cf/openai/gpt-oss-120b"}]}
+
+
+def chat_body(text):
+    return {"choices": [{"message": {"role": "assistant", "content": text, "reasoning": "thinking..."}}]}
+
+
+@pytest.fixture
+def account_id(env, monkeypatch):
+    import app.config as config
+
+    monkeypatch.setitem(config.cfg(), "provider_vars", {"cloudflare_account_id": "acc123"})
+
+
+@pytest.mark.parametrize("effort,sent", [("off", "low"), ("low", "low"), ("medium", "medium"), ("max", "high")])
+def test_gpt_oss_on_groq_clamps_effort_it_cannot_turn_off(env, monkeypatch, effort, sent):
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    fake = FakeHTTP((200, chat_body("the answer")))
+    monkeypatch.setattr(providers.httpx, "post", fake)
+    assert providers._ask_openai(GROQ, "openai/gpt-oss-120b", effort, "q", None, 30) == "the answer"
+    req = fake.requests[0]
+    assert req["url"] == "https://api.groq.com/openai/v1/chat/completions"
+    assert req["headers"] == {"Authorization": "Bearer gsk-test"}
+    assert req["json"]["reasoning_effort"] == sent and req["json"]["temperature"] == 0.3
+
+
+def test_gpt_oss_on_workers_ai_uses_the_responses_api(account_id, monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_AI_TOKEN", "cf-test")
+    body = {"output": [{"type": "reasoning", "content": [{"type": "reasoning_text", "text": "hmm"}]},
+                       {"type": "message", "content": [{"type": "output_text", "text": "the answer"}]}]}
+    fake = FakeHTTP((200, body))
+    monkeypatch.setattr(providers.httpx, "post", fake)
+    assert providers._ask_openai(WORKERS_AI, "@cf/openai/gpt-oss-120b", "high", "q", None, 30) == "the answer"
+    req = fake.requests[0]
+    assert req["url"] == "https://api.cloudflare.com/client/v4/accounts/acc123/ai/v1/responses"
+    assert req["json"] == {"model": "@cf/openai/gpt-oss-120b", "input": [{"role": "user", "content": "q"}],
+                           "reasoning": {"effort": "high"}}
+
+
+def test_a_base_url_missing_its_variable_is_not_configured(env, monkeypatch):
+    from app.config import registry
+
+    monkeypatch.setenv("CLOUDFLARE_AI_TOKEN", "cf-test")
+    monkeypatch.setitem(registry()["providers"], "workers_ai", WORKERS_AI)
+    assert providers.configured("workers_ai") is False  # no provider_vars.cloudflare_account_id
+    with pytest.raises(ProviderError, match="provider_vars.cloudflare_account_id") as e:
+        providers._ask_openai(WORKERS_AI, "@cf/openai/gpt-oss-120b", "high", "q", None, 30)
+    assert e.value.kind is ErrorKind.BAD_REQUEST
+
+
+def test_configured_needs_the_key(account_id, monkeypatch):
+    from app.config import registry
+
+    monkeypatch.setitem(registry()["providers"], "workers_ai", WORKERS_AI)
+    assert providers.configured("workers_ai") is False
+    monkeypatch.setenv("CLOUDFLARE_AI_TOKEN", "cf-test")
+    from app.secretstore import clear_cache
+
+    clear_cache()
+    assert providers.configured("workers_ai") is True
+
+
+@pytest.mark.parametrize("status,text,kind", [
+    (429, "Rate limit reached for model `openai/gpt-oss-120b` on tokens per minute (TPM): Limit 8000",
+     ErrorKind.RATE_LIMITED),
+    (429, "Rate limit reached for model `openai/gpt-oss-120b` on tokens per day (TPD): Limit 200000",
+     ErrorKind.QUOTA_EXHAUSTED),
+    (429, "4006: you have used up your daily free allocation of 10,000 neurons", ErrorKind.QUOTA_EXHAUSTED),
+    (400, "4006: you have used up your daily free allocation of 10,000 neurons", ErrorKind.QUOTA_EXHAUSTED),
+    (401, "Invalid API Key", ErrorKind.AUTH),
+])
+def test_free_tier_limits_are_told_apart(env, monkeypatch, status, text, kind):
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    monkeypatch.setattr(providers.httpx, "post", FakeHTTP((status, {"error": {"message": text}})))
+    with pytest.raises(ProviderError) as e:
+        providers._ask_openai(GROQ, "openai/gpt-oss-120b", "low", "q", None, 30)
+    assert e.value.kind is kind
+
+
+def test_an_empty_answer_is_a_failure_not_a_blank(env, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    monkeypatch.setattr(providers.httpx, "post", FakeHTTP((200, chat_body(""))))
+    with pytest.raises(ProviderError) as e:
+        providers._ask_openai(GROQ, "openai/gpt-oss-120b", "low", "q", None, 30)
+    assert e.value.kind is ErrorKind.SERVER

@@ -143,11 +143,35 @@ roughly a 1-in-500 event at that rate; it ended in 122 s as `side_b_failed`.
   so nothing trips: every run is a full result and every one is late. Only the
   latency SLO catches it, which is exactly why there is a latency SLO.
 
+## Round 3: GPT-OSS as the judge
+
+The judge moved to a third model family: GPT-OSS 120B on Groq's free tier,
+the same weights on Workers AI when Groq's daily quota runs out, and only then
+the sides' own families. Three scenarios were added; `always-contested` and the
+two below make every question go to the judge (the comparator never finds
+agreement), which ordinary scenarios rarely do. Groq and Workers AI latencies
+are assumptions (8 s and 25 s for a ruling), like the rest of the latency model.
+Raw output: [gamedays/2026-10-25-sim-round3-gpt-oss-judge.md](gamedays/2026-10-25-sim-round3-gpt-oss-judge.md).
+
+| scenario (10 runs) | hypothesis | held? | full results | p50 | p95 | over 240 s | what happened |
+|---|---|---|---|---|---|---|---|
+| every question contested | three debate rounds, judged by GPT-OSS on Groq, inside the budget | yes | 10/10 judged | 190 s | 236 s | 0 | close to the latency threshold: three rounds plus a ruling is the slow path by design |
+| Groq out of daily quota | the judge moves to Workers AI with no retries; still judged, a little slower; nothing degrades | **partly** | 10/10 judged | 241 s | 277 s | **5** | nothing degraded and there were no retries on quota, but Workers AI's slower ruling pushed half the contested runs past 240 s |
+| GPT-OSS down on both hosts | after retries, Gemini judges; still judged; both breakers open | yes | 10/10 judged | 225 s | 281 s | 4 | 14 retries on the dead hosts before the breakers opened (12 openings counting re-opens after half-open trials); the transcript names the fallback judge |
+| no faults, Gemini Flash quota, and the rest | unchanged from round 2 | yes | as round 2 | | | | the judge change touches only runs that need a ruling |
+
+What it says: losing the free judge costs **time, not answers**. A day on which
+Groq's quota is gone shows up as latency-SLO burn on contested questions, not as
+degraded runs. If that becomes common, the levers are a judge effort of
+`medium` instead of `high`, one debate round fewer, or Groq's paid tier. The
+retries on a host that is down hard are the expensive part until its breaker
+opens; three failures is the threshold.
+
 ### What the simulator can't tell you
 
 Real latency distributions and their tails; failures that are correlated
 (both providers behind the same network trouble); two OCPUs shared with
-Prometheus and the Claude CLI's Node.js start-up; memory with several runs at
+Prometheus and the Claude CLI's start-up; memory with several runs at
 once; real `Retry-After` values; the tunnel and Cloudflare. Those need the
 cluster.
 

@@ -5,13 +5,19 @@
 # OpenAI chat-completions protocol = one block + one secret in Vault. Restart
 # (or redeploy) to pick up changes. See docs/OPERATIONS.md, "Add a model".
 #
-# kind: claude_cli | gemini_api | gemini_cli | openai
-# trains_on_data: shown in the UI so users know which voices may train on prompts.
+# kind: claude_cli | gemini_api | openai
+# trains_on_data: shown in the UI so you know which voices may train on prompts.
+# A provider whose key isn't set is skipped in every fallback chain and shown as
+# "key missing"; nothing else breaks.
 #
 # Per-provider resilience knobs (all optional; defaults in app/providers.py):
 #   timeout_s           per-attempt timeout
 #   retry               {max_attempts, base_delay_s, max_delay_s}  full-jitter backoff
 #   circuit             {failure_threshold, cooldown_s, max_cooldown_s}  per provider/model
+# openai kind only:
+#   api                 chat (default: /chat/completions) | responses (/responses)
+#   base_url            may hold {placeholders} from config provider_vars (not secrets)
+#   supports_reasoning_effort, reasoning_efforts  the levels the model takes; effort is clamped
 
 pipeline:
   max_debate_rounds: 3
@@ -25,12 +31,18 @@ pipeline:
   utility: {provider: gemini, model: gemini-3.5-flash-lite, effort: "off"}
   utility_fallbacks:
     - {provider: gemini, model: gemini-3.8-flash, effort: low}
+    - {provider: groq, model: openai/gpt-oss-120b, effort: low}
     - {provider: claude, model: haiku, effort: low}
 
-  # Judge for conflicts that survive debate. A third provider is the best judge
-  # (it didn't argue either side); the prompt is anonymized either way.
-  judge: {provider: gemini, model: gemini-3.8-flash, effort: high}
+  # Judge for conflicts that survive debate: a third model family that argued
+  # neither side (GPT-OSS 120B, OpenAI's open-weight model), on Groq's free tier;
+  # the same weights on Workers AI when Groq's daily quota runs out. The sides'
+  # own families come last: better than no ruling, and the transcript says who
+  # judged. The prompt is anonymized and the order shuffled either way.
+  judge: {provider: groq, model: openai/gpt-oss-120b, effort: high}
   judge_fallbacks:
+    - {provider: workers_ai, model: "@cf/openai/gpt-oss-120b", effort: high}
+    - {provider: gemini, model: gemini-3.8-flash, effort: high}
     - {provider: claude, model: sonnet, effort: high}
 
   # Substitutes for a side whose model fails (after its own retries). A run
@@ -48,7 +60,7 @@ providers:
   claude:
     label: Claude
     kind: claude_cli
-    secret: claude_oauth_token          # from `claude setup-token`; uses your Pro/Max plan
+    secret: claude_oauth_token          # from `claude setup-token`: your own subscription, used only by you
     trains_on_data: false
     enabled: true
     timeout_s: 300
@@ -57,7 +69,7 @@ providers:
     models:
       - {id: haiku,  label: "Claude Haiku (fast)"}
       - {id: sonnet, label: "Claude Sonnet"}
-      - {id: opus,   label: "Claude Opus (Max plans)"}
+      - {id: opus,   label: "Claude Opus (if your plan includes it)"}
       - {id: fable,  label: "Claude Fable (if your plan includes it)"}
 
   gemini:
@@ -76,30 +88,43 @@ providers:
       - {id: gemini-3.5-flash-lite, label: "Gemini 3.5 Flash-Lite", thinking_levels: [minimal, low, medium, high]}
       - {id: gemini-4-argon,        label: "Gemini 4 Argon (check your AI Studio limits)", thinking_levels: [low, medium, high]}
 
-  gemini_cli:
-    label: Gemini CLI
-    kind: gemini_cli
-    secret: null                        # OAuth login done once inside the pod (docs/OPERATIONS.md)
-    trains_on_data: true
-    enabled: false
-    timeout_s: 300
-    models:
-      - {id: gemini-3.8-flash, label: "Gemini 3.8 Flash via CLI"}
-
-  # Optional free third voices. Model IDs change often: confirm them in each
-  # provider's console before enabling, and add the key to Vault.
+  # The third family: GPT-OSS 120B. Free tiers (check each console for today's limits):
+  # Groq's free plan, and Workers AI's daily free neurons as the fallback.
   groq:
     label: Groq
     kind: openai
     base_url: https://api.groq.com/openai/v1
-    secret: groq_api_key
+    secret: groq_api_key                # console.groq.com
+    # Groq keeps no inference data by default, apart from abuse logs for up to 30 days;
+    # Zero Data Retention (console: Data Controls) drops those too.
     trains_on_data: false
     supports_reasoning_effort: true
-    enabled: false
+    reasoning_efforts: [low, medium, high]   # GPT-OSS can't turn reasoning off: "off" is sent as low
+    enabled: true
     timeout_s: 90
+    retry: {max_attempts: 3, base_delay_s: 2, max_delay_s: 20}
+    circuit: {failure_threshold: 3, cooldown_s: 60, max_cooldown_s: 600}
     models:
       - {id: openai/gpt-oss-120b, label: "GPT-OSS 120B (Groq)"}
 
+  workers_ai:
+    label: Workers AI
+    kind: openai
+    api: responses                      # how Workers AI serves GPT-OSS
+    base_url: https://api.cloudflare.com/client/v4/accounts/{cloudflare_account_id}/ai/v1
+    secret: cloudflare_ai_token         # a Cloudflare API token with Workers AI permission
+    trains_on_data: false               # Cloudflare doesn't train on Workers AI content or keep it
+    supports_reasoning_effort: true
+    reasoning_efforts: [low, medium, high]
+    enabled: true
+    timeout_s: 120
+    retry: {max_attempts: 2, base_delay_s: 2, max_delay_s: 20}
+    circuit: {failure_threshold: 3, cooldown_s: 120, max_cooldown_s: 900}
+    models:
+      - {id: "@cf/openai/gpt-oss-120b", label: "GPT-OSS 120B (Workers AI)"}
+
+  # An example of one more OpenAI-compatible voice. Model IDs change often:
+  # confirm in the provider's console before enabling, and add the key to Vault.
   openrouter:
     label: OpenRouter
     kind: openai
@@ -110,14 +135,3 @@ providers:
     timeout_s: 120
     models:
       - {id: "deepseek/deepseek-r1:free", label: "DeepSeek R1 (free)"}
-
-  cerebras:
-    label: Cerebras
-    kind: openai
-    base_url: https://api.cerebras.ai/v1
-    secret: cerebras_api_key
-    trains_on_data: false
-    enabled: false
-    timeout_s: 90
-    models:
-      - {id: gpt-oss-120b, label: "GPT-OSS 120B (Cerebras)"}

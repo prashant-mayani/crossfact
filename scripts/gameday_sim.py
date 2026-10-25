@@ -68,6 +68,10 @@ LATENCY = {
     ("claude", "judge"): 40, ("claude", "merge"): 22,
     ("gemini", "answer"): 24, ("gemini", "debate"): 16, ("gemini", "compare"): 7,
     ("gemini", "judge"): 26, ("gemini", "merge"): 11,
+    # GPT-OSS 120B: fast on Groq's hardware, slower on Workers AI
+    ("groq", "answer"): 9, ("groq", "debate"): 7, ("groq", "compare"): 4, ("groq", "judge"): 8, ("groq", "merge"): 5,
+    ("workers ai", "answer"): 30, ("workers ai", "debate"): 22, ("workers ai", "compare"): 12,
+    ("workers ai", "judge"): 25, ("workers ai", "merge"): 15,
 }
 MODEL_FACTOR = {"haiku": 0.45, "opus": 1.6, "gemini-3.5-flash-lite": 0.6, "gemini-3.6-flash": 1.1}
 P_AGREE = 0.55  # chance the comparator finds no conflicts
@@ -76,7 +80,7 @@ COMPARE_AGREE = ('{"verdict":"agree","agreements":["x"],"unique_a":["a detail"],
                  '"conflicts":[]}')
 COMPARE_CONFLICT = ('{"verdict":"partial","agreements":["x"],"unique_a":[],"unique_b":[],'
                     '"conflicts":[{"topic":"y","a_position":"1","b_position":"2"}]}')
-JUDGE = '{"rulings":[{"topic":"y","winner":"A","reason":"better sourced"}],"analysis":"A cites evidence."}'
+JUDGE = '{"rulings":[{"point":1,"winner":"A","reason":"better sourced"}],"analysis":"A cites evidence."}'
 
 
 def purpose_of(prompt: str) -> str:
@@ -95,6 +99,7 @@ class SimModels:
     def __init__(self, seed: int):
         self.rng = random.Random(seed)
         self.calls: Counter = Counter()
+        self.p_agree = P_AGREE
 
     def __call__(self, p, model, effort, prompt, files, timeout):
         from app.resilience import ErrorKind, ProviderError
@@ -109,7 +114,7 @@ class SimModels:
             raise ProviderError(f"{pid}/{model} timed out after {timeout:.0f}s", ErrorKind.TIMEOUT)
         time.sleep(latency)
         if purpose == "compare":
-            return COMPARE_AGREE if self.rng.random() < P_AGREE else COMPARE_CONFLICT
+            return COMPARE_AGREE if self.rng.random() < self.p_agree else COMPARE_CONFLICT
         if purpose == "judge":
             return JUDGE
         return f"{purpose} from {pid}/{model}"
@@ -122,11 +127,23 @@ SCENARIOS = [
      "faults": [],
      "hypothesis": "Every run ends as a full two-model result (agreed, debated or judged); "
                    "no retries; p95 well under the 240 s latency threshold."},
+    {"name": "always-contested", "title": "No faults, every question contested to the end",
+     "faults": [], "p_agree": 0.0,
+     "hypothesis": "Every run debates three rounds and is judged by GPT-OSS on Groq; runs take longer "
+                   "but stay inside the 600 s budget; no degraded runs."},
     {"name": "gemini-flash-quota", "title": "Gemini 3.8 Flash out of daily quota",
      "faults": [("gemini/gemini-3.8-flash", "quota", 1.0, 0)],
-     "hypothesis": "Side B and the judge fail fast (no retries on quota) and their configured "
-                   "substitutes answer: Gemini 3.6 Flash for side B, Claude Sonnet as judge. Runs stay "
-                   "two-model, each recording the substitution; the success SLI is unaffected."},
+     "hypothesis": "Side B fails fast (no retries on quota) and its configured substitute answers "
+                   "(Gemini 3.6 Flash); the judge is unaffected (GPT-OSS on Groq). Runs stay two-model, each "
+                   "recording the substitution; the success SLI is unaffected."},
+    {"name": "groq-quota", "title": "Groq out of daily quota (the judge's first choice)",
+     "faults": [("groq", "quota", 1.0, 0)], "p_agree": 0.0,  # every run needs a ruling
+     "hypothesis": "The judge moves to the same model on Workers AI with no retries on Groq; runs that "
+                   "need a ruling are still judged, a little slower; nothing degrades."},
+    {"name": "gpt-oss-everywhere-down", "title": "GPT-OSS unavailable on both hosts",
+     "faults": [("groq", "error", 1.0, 0), ("workers_ai", "error", 1.0, 0)], "p_agree": 0.0,
+     "hypothesis": "After the retries, the judge falls back to Gemini (a side's own family: the transcript "
+                   "says so); runs are still judged; both GPT-OSS breakers open after three failures."},
     {"name": "gemini-all-quota", "title": "All Gemini models out of daily quota",
      "faults": [("gemini", "quota", 1.0, 0)],
      "hypothesis": "Side B has no working substitute, so every run finishes with Claude's answer alone, "
@@ -164,8 +181,8 @@ def setup(tmp: str, scale: float):
     clock.install()
     cfg = yaml.safe_load(open(os.path.join(ROOT, "config", "providers.example.yaml")))
     for pid, p in cfg["providers"].items():
-        if pid in ("claude", "gemini"):
-            p.update(kind="sim", secret=None, enabled=True)
+        if pid in ("claude", "gemini", "groq", "workers_ai"):
+            p.update(kind="sim", secret=None, enabled=True, base_url="")
         else:
             p["enabled"] = False
     providers_file = os.path.join(tmp, "providers.yaml")
@@ -263,7 +280,7 @@ def report(sc: dict, res: dict) -> str:
              f"Breaker openings: {res['opens']:.0f}. "
              f"Substitutions: {subs}.",
              ""]
-    if sc["name"] in ("claude-hangs", "gemini-slow", "gemini-flash-quota"):
+    if sc["name"] in ("claude-hangs", "gemini-slow", "gemini-flash-quota", "groq-quota", "gpt-oss-everywhere-down"):
         lines += ["Run by run:", "", "| run | outcome | took | answered by |", "|---|---|---|---|"]
         for r in rows:
             who = "; ".join(f"{s} {m}" + (f" (for {sub})" if sub else "") for s, m, sub in r["answered"]) or "-"
@@ -297,6 +314,7 @@ def main() -> None:
               f"seed {args.seed} -->\n")
         for sc in chosen:
             models.rng.seed(args.seed)  # same luck in every scenario, so differences come from the faults
+            models.p_agree = sc.get("p_agree", P_AGREE)
             print(report(sc, run_scenario(sc, cfg, models, args.runs, args.gap)), flush=True)
 
 
