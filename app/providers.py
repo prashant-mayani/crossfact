@@ -43,8 +43,10 @@ from . import telemetry as tm
 from .config import pipeline_setting, registry
 from .resilience import (
     BREAKERS,
+    RETRYABLE,
     STATE_VALUE,
     BreakerPolicy,
+    BreakerState,
     Deadline,
     ErrorKind,
     ProviderError,
@@ -472,6 +474,39 @@ def ask(pid: str, model: str, effort: str, prompt: str, files: list[str] | None 
         sp.set_attribute("crossfact.attempts", attempts)
     return {"text": (text or "").strip(), "provider": pid, "model": model, "effort": effort,
             "attempts": attempts, "duration_s": round(duration, 2)}
+
+
+def prime_metrics() -> None:
+    """Every enabled model's call, retry, straggler and breaker series at zero (see
+    orchestrator.prime_metrics for why). Bounded by the registry: models x purposes x
+    outcomes, a few hundred series."""
+    reg = registry()
+    pipe = reg["pipeline"]
+    enabled = enabled_providers()
+    combos = {(pid, m["id"], purpose) for pid, p in enabled.items() for m in p.get("models", [])
+              for purpose in ("answer", "debate")}
+    for key, purposes in (("utility", ("compare", "merge")), ("utility_fallbacks", ("compare", "merge")),
+                          ("judge", ("judge",)), ("judge_fallbacks", ("judge",))):
+        entries = pipe.get(key) or []
+        for e in [entries] if isinstance(entries, dict) else entries:
+            if e.get("provider") in enabled:
+                combos |= {(e["provider"], e["model"], purpose) for purpose in purposes}
+    results = ["ok", *(k.value for k in ErrorKind)]
+    for pid, model, purpose in combos:
+        for result in results:
+            tm.PROVIDER_CALLS.labels(pid, model, purpose, result)
+        tm.PROVIDER_DURATION.labels(pid, model, purpose)
+        if purpose in ("answer", "debate"):
+            tm.STRAGGLERS.labels(pid, model, purpose)
+    for pid in enabled:
+        for kind in RETRYABLE:
+            tm.PROVIDER_RETRIES.labels(pid, kind.value)
+    for pid, model in {(c[0], c[1]) for c in combos}:
+        name = f"{pid}/{model}"
+        for state in BreakerState:
+            tm.CIRCUIT_TRANSITIONS.labels(name, state.value)
+        if name not in BREAKERS.all():
+            tm.CIRCUIT_STATE.labels(name).set(0)
 
 
 def health(pid: str) -> dict:

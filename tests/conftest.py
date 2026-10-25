@@ -72,6 +72,7 @@ class FakeLLM:
     def __init__(self):
         self.rules: list[dict] = []
         self.calls: list[dict] = []
+        self.prompts: list[str] = []
 
     def on(self, *, provider=None, model=None, purpose=None, reply=None, error=None, times=None):
         self.rules.append({"provider": provider, "model": model, "purpose": purpose, "reply": reply,
@@ -81,6 +82,7 @@ class FakeLLM:
     def __call__(self, p, model, effort, prompt, files, timeout):
         pid = p["label"].lower()
         purpose = purpose_of(prompt)
+        self.prompts.append(prompt)
         self.calls.append({"provider": pid, "model": model, "purpose": purpose, "effort": effort,
                            "timeout": timeout, "files": files})
         for r in self.rules:

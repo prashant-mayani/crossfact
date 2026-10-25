@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import auth, db, faults
+from . import auth, db, faults, orchestrator, providers
 from . import telemetry as tm
 from .config import VERSION, cfg, pipeline_setting, registry
 from .lifecycle import INSTANCE_ID, LIFECYCLE
@@ -46,6 +46,8 @@ async def lifespan(_app: FastAPI):
             pw = "change-me-now"
         db.create_user("admin", auth.hash_pw(pw), role="admin")
     tm.BUILD.info({"version": VERSION, "instance": INSTANCE_ID})
+    orchestrator.prime_metrics()  # every bounded series at zero, so increase() sees the first event
+    providers.prime_metrics()
     tm.init_tracing(cfg()["tracing"], VERSION)
     tm.start_metrics_server(int(cfg()["server"]["metrics_port"]))
     LIFECYCLE.start()

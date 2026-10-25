@@ -31,6 +31,14 @@ from .providers import ask
 from .resilience import Deadline, ErrorKind, ProviderError
 
 SUCCESS = {"agreed", "debated", "judged", "union", "single"}
+# Every outcome a run of each mode can end with ("abandoned": its pod died; lifecycle.py).
+OUTCOMES_BY_MODE = {
+    "single": ("single", "error", "abandoned"),
+    "union": ("union", "degraded", "error", "abandoned"),
+    "consensus": ("agreed", "debated", "judged", "degraded", "error", "abandoned"),
+}
+DEGRADE_REASONS = ("side_a_failed", "side_b_failed", "comparator_failed", "merge_failed", "judge_failed",
+                   "deadline")
 
 COMPARATOR_PROMPT = """You are a strict comparator. Two AI answers to the same question follow.
 Decompose them. Respond with ONLY a JSON object, no markdown fences, no prose:
@@ -92,25 +100,26 @@ YOUR PREVIOUS ANSWER:
 {own}"""
 
 JUDGE_PROMPT = """You are a neutral arbiter. Two anonymous AI assistants gave final,
-still-conflicting positions on specific points after debate. For each contested
-point, rule which position is better supported, or rule "unverified" if neither
-can be trusted without external evidence. You do not know which system produced
-which answer; judge only the content. Respond with ONLY JSON:
+still-conflicting positions on specific points after debate. For each numbered
+contested point, rule which position is better supported, or rule "unverified"
+if neither can be trusted without external evidence. You do not know which
+system produced which answer; judge only the content. Respond with ONLY JSON,
+one ruling per point:
 {{
- "rulings": [{{"topic": "...", "winner": "A" | "B" | "unverified", "reason": "one or two sentences"}}],
+ "rulings": [{{"point": 1, "winner": "A" | "B" | "unverified", "reason": "one or two sentences"}}],
  "analysis": "3-6 sentence overall analysis"
 }}
 
 QUESTION:
 {question}
 
-CONTESTED POINTS:
+CONTESTED POINTS (what each answer says):
 {conflicts}
 
-POSITION A:
+ANSWER A IN FULL:
 {a}
 
-POSITION B:
+ANSWER B IN FULL:
 {b}"""
 
 
@@ -301,10 +310,65 @@ def _merge(run: Run, question: str, settled, comp, ruling_block: str, deadline: 
     return None
 
 
+def _fmt_judge_points(conflicts, flip: bool) -> str:
+    """Numbered points with each answer's position, labelled the way the judge sees the
+    answers: when they are swapped, so are the positions (or the points would credit A
+    with B's claim)."""
+    first, second = ("b_position", "a_position") if flip else ("a_position", "b_position")
+    return "\n".join(f"{i}. {c.get('topic', '?')}\n   Answer A says: {c.get(first, '')}\n"
+                     f"   Answer B says: {c.get(second, '')}" for i, c in enumerate(conflicts, 1)) or "(none)"
+
+
+def _match_rulings(raw_rulings, conflicts) -> list[dict]:
+    """One ruling per conflict, in conflict order. Matched by point number, then by
+    topic, then by position; a point the judge skipped is "unverified"."""
+    by_point, by_topic, loose = {}, {}, []
+    for r in raw_rulings:
+        try:
+            n = int(r.get("point"))
+        except (TypeError, ValueError):
+            n = None
+        if n is not None and 1 <= n <= len(conflicts) and n not in by_point:
+            by_point[n] = r
+        elif str(r.get("topic", "")).strip().lower():
+            by_topic.setdefault(str(r.get("topic")).strip().lower(), r)
+        else:
+            loose.append(r)
+    out = []
+    for i, c in enumerate(conflicts, 1):
+        r = by_point.get(i) or by_topic.get(str(c.get("topic", "")).strip().lower())
+        if r is None and loose:
+            r = loose.pop(0)
+        r = dict(r or {"winner": "unverified", "reason": "the judge gave no ruling on this point"})
+        if r.get("winner") not in ("A", "B", "unverified"):
+            r["winner"] = "unverified"
+        r["topic"] = c.get("topic", "?")
+        r.pop("point", None)
+        out.append(r)
+    return out
+
+
+def _ruling_block(conflicts, rulings, analysis: str) -> str:
+    """What the merge needs to apply each ruling: the winning position itself, not
+    just a side letter it has no way to look up."""
+    lines = []
+    for c, r in zip(conflicts, rulings, strict=True):
+        if r["winner"] == "A":
+            lines.append(f"- {c.get('topic', '?')}: {c.get('a_position', '')} (ruled correct: {r.get('reason', '')})")
+        elif r["winner"] == "B":
+            lines.append(f"- {c.get('topic', '?')}: {c.get('b_position', '')} (ruled correct: {r.get('reason', '')})")
+        else:
+            lines.append(f"- {c.get('topic', '?')}: UNVERIFIED. One answer says: {c.get('a_position', '')}; "
+                         f"the other says: {c.get('b_position', '')} ({r.get('reason', '')})")
+    return ("JUDGE RULINGS ON REMAINING CONFLICTS (state the ruled-correct position; present UNVERIFIED items "
+            "as uncertain, with both positions):\n" + "\n".join(lines) + f"\n\nJUDGE ANALYSIS:\n{analysis}")
+
+
 def _judge(run: Run, question: str, conflicts, a: str, b: str, deadline: Deadline) -> str | None:
     flip = random.random() < 0.5  # anonymize: the judge can't learn which side is which
     first, second = (b, a) if flip else (a, b)
-    prompt = JUDGE_PROMPT.format(question=question, conflicts=_fmt_conflicts(conflicts), a=first, b=second)
+    prompt = JUDGE_PROMPT.format(question=question, conflicts=_fmt_judge_points(conflicts, flip),
+                                 a=first, b=second)
     for cfg in _chain("judge", "judge_fallbacks"):
         try:
             raw = ask(cfg["provider"], cfg["model"], cfg.get("effort", "high"), prompt, deadline=deadline,
@@ -319,15 +383,15 @@ def _judge(run: Run, question: str, conflicts, a: str, b: str, deadline: Deadlin
         except (json.JSONDecodeError, ValueError) as e:
             run.record("error", where="judge", model=label(cfg), kind="bad_json", detail=str(e)[:200])
             continue
-        rulings = [r for r in j.get("rulings", []) if isinstance(r, dict)]
-        if flip:
+        if not isinstance(j, dict):
+            run.record("error", where="judge", model=label(cfg), kind="bad_json", detail="not a JSON object")
+            continue
+        rulings = _match_rulings([r for r in j.get("rulings", []) if isinstance(r, dict)], conflicts)
+        if flip:  # the judge's "A" was the answer shown first, which was B's
             for r in rulings:
-                r["winner"] = {"A": "B", "B": "A"}.get(r.get("winner"), r.get("winner"))
-        run.record("judge", judge=label(cfg), rulings=rulings, analysis=j.get("analysis", ""))
-        lines = [f"- {r.get('topic', '?')}: side {r.get('winner', '?')}, because {r.get('reason', '')}"
-                 for r in rulings]
-        return ("JUDGE RULINGS ON REMAINING CONFLICTS (follow these; present 'unverified' items as uncertain):\n"
-                + "\n".join(lines) + f"\n\nJUDGE ANALYSIS:\n{j.get('analysis', '')}")
+                r["winner"] = {"A": "B", "B": "A"}.get(r["winner"], r["winner"])
+        run.record("judge", judge=label(cfg), rulings=rulings, analysis=j.get("analysis", ""), shown_swapped=flip)
+        return _ruling_block(conflicts, rulings, j.get("analysis", ""))
     return None
 
 
@@ -338,6 +402,28 @@ def _side_by_side(a_side, a_text, b_side, b_text, note: str) -> str:
 def _unresolved(conflicts) -> str:
     return ("UNRESOLVED CONFLICTS (present both positions side by side and say they are unresolved):\n"
             + _fmt_conflicts(conflicts, "a_position", "b_position"))
+
+
+# ---- metrics -----------------------------------------------------------------------------
+
+def prime_metrics() -> None:
+    """Create this module's label combinations at zero, before anything happens.
+
+    Prometheus's increase() and rate() measure change between samples, so a series
+    whose first sample is already 1 loses that first event: the first degraded run
+    would never reach the SLO, the first fallback never reach a dashboard."""
+    for mode, outcomes in OUTCOMES_BY_MODE.items():
+        for outcome in outcomes:
+            tm.RUNS.labels(mode, outcome)
+        for result in {"success" if o in SUCCESS else o for o in outcomes}:
+            tm.RUN_DURATION.labels(mode, result)
+    for reason in DEGRADE_REASONS:
+        tm.DEGRADED.labels(reason)
+    for key, subs in (registry()["pipeline"].get("fallbacks") or {}).items():
+        model = key.split("/", 1)[-1]
+        for sub in subs:
+            for side in ("A", "B"):
+                tm.SUBSTITUTIONS.labels(side, model, sub.get("model", model))
 
 
 # ---- the pipeline ---------------------------------------------------------------------

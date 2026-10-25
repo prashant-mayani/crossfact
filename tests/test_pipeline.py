@@ -1,4 +1,6 @@
 """The consensus pipeline end to end, through the real call path with a fake model."""
+import json
+
 import pytest
 
 from app.resilience import ErrorKind, ProviderError
@@ -40,6 +42,53 @@ def test_persistent_conflict_goes_to_the_judge_and_rulings_are_unflipped(llm, mo
     assert len(stages(out, "debate")) == 3
     judge = stages(out, "judge")[0]
     assert judge["rulings"][0]["winner"] == "B"  # judge said "A" about the flipped order -> real side B
+
+
+CAPITAL = ('{"verdict":"partial","agreements":[],"unique_a":[],"unique_b":[],'
+           '"conflicts":[{"topic":"capital","a_position":"Canberra","b_position":"Sydney"}]}')
+
+
+def content_judge(prompt: str) -> str:
+    """A judge that reads: it picks the answer saying Canberra, and refuses to rule when
+    the contested points contradict the full answers it was shown."""
+    import re
+
+    says = dict(re.findall(r"Answer ([AB]) says: (\w+)", prompt))
+    full = dict(re.findall(r"ANSWER ([AB]) IN FULL:\n(.*?)(?:\n\n|$)", prompt, re.S))
+    consistent = all(says[k] in full[k] for k in "AB")
+    winner = next(k for k, v in says.items() if v == "Canberra") if consistent else "unverified"
+    return json.dumps({"rulings": [{"point": 1, "winner": winner, "reason": "r"}], "analysis": "ok"})
+
+
+@pytest.mark.parametrize("draw", [0.0, 0.9], ids=["shown-swapped", "shown-in-order"])
+def test_judge_sees_points_labelled_like_the_answers_in_either_order(llm, monkeypatch, draw):
+    llm.on(purpose="compare", reply=CAPITAL)
+    llm.on(provider="alpha", purpose="answer", reply="The capital is Canberra.")
+    llm.on(provider="beta", purpose="answer", reply="The capital is Sydney.")
+    llm.on(provider="alpha", purpose="debate", reply="Still Canberra.")
+    llm.on(provider="beta", purpose="debate", reply="Still Sydney.")
+    llm.on(purpose="judge", reply=content_judge)
+    monkeypatch.setattr("app.orchestrator.random.random", lambda: draw)
+    out = run()
+    judge = stages(out, "judge")[0]
+    assert judge["shown_swapped"] is (draw < 0.5)
+    assert judge["rulings"][0]["winner"] == "A"  # alpha said Canberra, however the judge saw it
+    # the merge gets the winning position itself, not a side letter it can't look up
+    merge_text = [p for p in llm.prompts if "Combine the material" in p][-1]
+    assert "capital: Canberra (ruled correct" in merge_text and "side A" not in merge_text
+
+
+def test_judge_rulings_are_matched_to_points_not_trusted_by_order(llm, monkeypatch):
+    two = ('{"verdict":"partial","agreements":[],"unique_a":[],"unique_b":[],"conflicts":['
+           '{"topic":"capital","a_position":"Canberra","b_position":"Sydney"},'
+           '{"topic":"population","a_position":"27 million","b_position":"30 million"}]}')
+    llm.on(purpose="compare", reply=two)
+    # out of order, one point missing, one with an invented winner
+    llm.on(purpose="judge", reply='{"rulings":[{"point":2,"winner":"B","reason":"census"},'
+                                  '{"point":7,"winner":"maybe"}],"analysis":"x"}')
+    monkeypatch.setattr("app.orchestrator.random.random", lambda: 0.9)
+    rulings = stages(run(), "judge")[0]["rulings"]
+    assert [(r["topic"], r["winner"]) for r in rulings] == [("capital", "unverified"), ("population", "B")]
 
 
 def test_union_mode_never_debates(llm):
