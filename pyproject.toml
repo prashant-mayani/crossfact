@@ -1,0 +1,31 @@
+[project]
+name = "crossfact"
+version = "2.0.0"
+description = "Two models, one answer: a self-hosted Claude + Gemini consensus app"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S"]
+ignore = [
+  "S101",   # assert is how pytest works
+  "S603",   # subprocess with argv lists is the point of the CLI adapters
+  "S607",   # CLIs are resolved from PATH inside the image
+  "S311",   # random is used for jitter and judge-order shuffling, not secrets
+  "S608",   # SQL is parameterized; table/column names come from code, never input
+  "S104",   # binding 0.0.0.0 inside a pod is intended
+]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.File", "fastapi.Form", "fastapi.Depends"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S105", "S106", "S107", "S108"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]

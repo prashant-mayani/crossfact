@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Admin — Crossfact{% endblock %}
+{% block content %}
+<h1>Admin</h1>
+{% if msg %}<p class="ok" role="status">{{ msg }}</p>{% endif %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+<div class="card">
+  <h2>Users</h2>
+  <table class="users">
+    <tr><th>User</th><th>Role</th><th>Status</th><th></th><th></th></tr>
+    {% for u in users %}
+    <tr>
+      <td>{{ u.username }}</td><td>{{ u.role }}</td>
+      <td>{{ 'disabled' if u.disabled else 'active' }}</td>
+      <td>{% if u.id != s.user_id %}<form method="post" action="/admin/users/{{ u.id }}/toggle"><input type="hidden" name="csrf" value="{{ s.csrf }}"><button class="link">{{ 'Enable' if u.disabled else 'Disable' }}</button></form>{% endif %}</td>
+      <td><form method="post" action="/admin/users/{{ u.id }}/reset2fa" data-confirm="Reset two-factor for {{ u.username }}? They will scan a new QR code at next sign-in."><input type="hidden" name="csrf" value="{{ s.csrf }}"><button class="link">Reset two-factor</button></form></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h2>Create user</h2>
+  <p class="hint">Hand over the temporary password in person. They set up two-factor at first sign-in and change the password in Settings. Their chats and files are visible only to them.</p>
+  <form method="post" action="/admin/users">
+    <input type="hidden" name="csrf" value="{{ s.csrf }}">
+    <label>Username<input name="username" required pattern="[a-zA-Z0-9._-]{2,32}" autocomplete="off"></label>
+    <label>Temporary password<input name="password" minlength="10" required autocomplete="new-password"></label>
+    <label>Role<select name="role"><option value="user">user</option><option value="admin">admin</option></select></label>
+    <button class="primary">Create user</button>
+  </form>
+</div>
+
+<div class="card" id="faults">
+  <h2>Fault injection</h2>
+  <p class="hint">Break a model on purpose to rehearse failures (docs/RESILIENCE.md has the game-day plan). Every fault expires on its own; a banner shows while any is active.</p>
+  {% if active_faults %}
+  <table class="users">
+    <tr><th>Target</th><th>Mode</th><th>Chance</th><th>Ends</th><th>By</th><th></th></tr>
+    {% for f in active_faults %}
+    <tr>
+      <td>{{ f.target }}</td><td>{{ f.mode }}{% if f.mode == 'latency' %} +{{ f.latency_s | int }}s{% endif %}</td>
+      <td>{{ (f.probability * 100) | round | int }}%</td>
+      <td><time data-ts="{{ f.until | int }}"></time></td><td>{{ f.created_by }}</td>
+      <td><form method="post" action="/admin/faults/{{ f.id }}/delete"><input type="hidden" name="csrf" value="{{ s.csrf }}"><button class="link">Clear</button></form></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="hint">No faults active.</p>
+  {% endif %}
+  <form method="post" action="/admin/faults" class="faultform">
+    <input type="hidden" name="csrf" value="{{ s.csrf }}">
+    <label>Target<select name="target">{% for t in fault_targets %}<option>{{ t }}</option>{% endfor %}</select></label>
+    <label>Mode<select name="mode">{% for m in fault_modes %}<option>{{ m }}</option>{% endfor %}</select></label>
+    <label>Chance (0–1)<input name="probability" type="number" min="0" max="1" step="0.05" value="1"></label>
+    <label>Added latency (s, latency mode)<input name="latency_s" type="number" min="0" max="600" value="60"></label>
+    <label>Duration (minutes)<input name="minutes" type="number" min="1" max="240" value="15"></label>
+    <button class="primary">Start fault</button>
+  </form>
+</div>
+{% endblock %}

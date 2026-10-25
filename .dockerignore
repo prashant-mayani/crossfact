@@ -1,0 +1,15 @@
+.git
+.github
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+charts
+docs
+tests
+data
+*.md
+requirements-dev.*
+scripts/gameday_sim.py
+scripts/prepublish-check.sh

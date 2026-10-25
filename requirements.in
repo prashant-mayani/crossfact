@@ -1,0 +1,19 @@
+# Runtime dependencies. Compile with:
+#   uv pip compile requirements.in --generate-hashes --python-version 3.12 \
+#     --python-platform aarch64-unknown-linux-gnu -o requirements.txt
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart
+httpx
+pyyaml
+pyotp
+argon2-cffi
+itsdangerous
+cryptography
+qrcode
+oci                 # instance-principal auth for backups/restore and the VM secrets mode
+prometheus-client
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http

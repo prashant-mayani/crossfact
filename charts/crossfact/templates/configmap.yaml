@@ -1,0 +1,39 @@
+{{- if le (int .Values.terminationGracePeriodSeconds) (add (int .Values.runDeadlineSeconds) 60) -}}
+{{- fail "terminationGracePeriodSeconds must exceed runDeadlineSeconds + 60, or a deploy can kill a run mid-flight" -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: crossfact-config
+  labels:
+    {{- include "crossfact.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    data_dir: /data
+    secrets_mode: file
+    secrets_dir: /var/run/secrets/crossfact
+    base_url: {{ if .Values.hostname }}https://{{ .Values.hostname }}{{ else }}""{{ end }}
+    server:
+      host: 0.0.0.0
+      port: 8080
+      metrics_port: 9095
+      drain_timeout_s: {{ add (int .Values.runDeadlineSeconds) 30 }}
+    pipeline:
+      run_deadline_s: {{ int .Values.runDeadlineSeconds }}
+    tracing:
+      enabled: {{ .Values.tracing.enabled }}
+      endpoint: {{ .Values.tracing.endpoint | quote }}
+      sample_ratio: {{ .Values.tracing.sampleRatio }}
+    backup:
+      bucket: {{ .Values.backup.bucket | quote }}
+      namespace: {{ .Values.backup.namespace | quote }}
+      region: {{ .Values.backup.region | quote }}
+    uploads:
+      {{- toYaml .Values.config.uploads | nindent 6 }}
+    quotas:
+      {{- toYaml .Values.config.quotas | nindent 6 }}
+    session_hours: {{ .Values.config.session_hours }}
+  {{- if .Values.providers }}
+  providers.yaml: |
+    {{- toYaml .Values.providers | nindent 4 }}
+  {{- end }}

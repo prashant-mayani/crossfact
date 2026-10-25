@@ -1,0 +1,20 @@
+{{- if and .Values.probe.enabled .Values.hostname }}
+# The availability SLI: a synthetic request through the whole user path
+# (Cloudflare edge -> tunnel -> cloudflared -> Service -> pod) every 30 seconds.
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: crossfact-public
+  labels:
+    {{- include "crossfact.labels" . | nindent 4 }}
+spec:
+  jobName: crossfact-public
+  interval: {{ .Values.probe.interval }}
+  module: {{ .Values.probe.module }}
+  prober:
+    url: {{ .Values.probe.proberUrl }}
+  targets:
+    staticConfig:
+      static:
+        - https://{{ .Values.hostname }}/healthz
+{{- end }}

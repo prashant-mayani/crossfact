@@ -1,0 +1,129 @@
+# Crossfact chart defaults. Nothing environment-specific lives here: the private
+# deploy repo sets hostname, image digest and bucket details in its Argo CD
+# Application (helm.valuesObject).
+
+image:
+  repository: ghcr.io/OWNER/crossfact
+  tag: main
+  # Set by CI promotion. When present it wins over the tag, so what runs is
+  # exactly what was scanned and signed.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# Public hostname (e.g. ai.example.com): TOTP issuer and synthetic-probe target.
+hostname: ""
+
+# SQLite on a node-local volume: one pod serves, and two overlap briefly during
+# a rollout (both on the one node, sharing the volume; see app/db.py).
+strategy:
+  maxSurge: 1
+  maxUnavailable: 0
+
+persistence:
+  storageClass: local-path
+  size: 10Gi
+  existingClaim: ""
+
+# Rendered into /etc/crossfact/config.yaml.
+config:
+  uploads: {retention_days: 30, max_mb: 25}
+  quotas: {user_daily_runs: 40, admin_daily_runs: 200}
+  session_hours: 72
+
+# Full replacement for providers.yaml. Empty = the registry baked into the image
+# (config/providers.example.yaml).
+providers: {}
+
+# Whole-run time budget. The pod's grace period must outlast it so a deploy
+# never cuts a run short; the chart refuses to render if it doesn't.
+runDeadlineSeconds: 600
+terminationGracePeriodSeconds: 690
+
+secrets:
+  externalSecret:
+    enabled: true
+    storeRef: {kind: ClusterSecretStore, name: oci-vault}
+    refreshInterval: 1h
+    keys: [claude_oauth_token, gemini_api_key, session_secret, field_encryption_key, admin_bootstrap_password]
+    extraKeys: []        # e.g. [groq_api_key] when you enable that provider
+  existingSecret: ""     # for clusters without ESO: a plain Secret with the same keys
+
+backup:
+  enabled: true
+  schedule: "17 3 * * *"         # nightly cleanup + backup
+  verifySchedule: "41 4 * * 0"   # weekly: download the latest backup and prove it opens
+  bucket: crossfact-backups
+  namespace: ""                  # Object Storage namespace (terraform output)
+  region: ""
+
+restore:
+  enabled: true          # Argo CD Sync hook: restores the latest backup into an empty volume
+
+networkPolicy:
+  enabled: true
+  webFromNamespace: cloudflared
+  metricsFromNamespace: monitoring
+  tracingNamespace: monitoring
+  tracingPort: 4318
+  # Only backup/restore pods (label crossfact.io/imds=true) may reach the instance
+  # metadata service, i.e. act as the VM's OCI identity. The app pod never can.
+  metadataCidr: 169.254.169.254/32
+
+tracing:
+  enabled: true
+  endpoint: http://tempo.monitoring.svc.cluster.local:4318
+  sampleRatio: 1.0
+
+metrics:
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    labels: {}
+
+probe:
+  enabled: true          # needs hostname
+  proberUrl: blackbox-exporter.monitoring.svc.cluster.local:9115
+  module: http_2xx
+  interval: 30s
+
+slo:
+  enabled: true
+  window: 28d
+  availability:
+    objective: 0.995     # ~3h20m of failed probes per 28 days
+    probeIntervalSeconds: 30  # keep equal to probe.interval
+  consensusSuccess:
+    objective: 0.95      # runs that end as a real two-model result
+  consensusLatency:
+    objective: 0.95      # successful consensus runs finishing under the threshold
+    thresholdSeconds: 240  # must be a histogram bucket: 15 30 60 90 120 180 240 300 420 600 900
+  # Low traffic: one bad run out of two is a 50% error rate. Burn-rate alerts on
+  # run-based SLIs wait until the window holds at least this many runs.
+  minRunsForBurnAlert: 6
+  runbookBaseUrl: https://github.com/OWNER/crossfact/blob/main/docs/SLO.md
+
+dashboards:
+  enabled: true
+
+resources:
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {memory: 2Gi}  # headroom for two Claude CLI subprocesses at once
+
+jobResources:
+  requests: {cpu: 50m, memory: 128Mi}
+  limits: {memory: 512Mi}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile: {type: RuntimeDefault}
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+
+nodeSelector: {}
+tolerations: []

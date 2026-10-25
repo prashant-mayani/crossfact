@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Set up 2FA{% endblock %}
+{% block mainclass %}center{% endblock %}
+{% block content %}
+<div class="card auth">
+  <div class="brand big"><span class="glyph">◇</span> Crossfact</div>
+  <p class="sub">First sign-in: scan this QR with Google Authenticator (or any TOTP app), then enter the code it shows.</p>
+  <div class="qr">{{ qr | safe }}</div>
+  <p class="hint">Can't scan? Enter this key manually: <code>{{ secret }}</code></p>
+  <form method="post" action="/totp">
+    <label>Code<input name="code" inputmode="numeric" autocomplete="one-time-code" required autofocus></label>
+    <button class="primary">Activate</button>
+  </form>
+</div>
+{% endblock %}

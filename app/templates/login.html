@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Sign in — Crossfact{% endblock %}
+{% block mainclass %}center{% endblock %}
+{% block content %}
+<div class="card auth">
+  <div class="brand big"><span class="glyph">◇</span> Crossfact</div>
+  <p class="sub">Two models. One answer.</p>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" action="/login">
+    <label>Username<input name="username" autocomplete="username" required autofocus></label>
+    <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+    <button class="primary">Continue</button>
+  </form>
+</div>
+{% endblock %}

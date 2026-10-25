@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<div class="card">
+  <h2>Change password</h2>
+  <form method="post" action="/settings/password">
+    <input type="hidden" name="csrf" value="{{ s.csrf }}">
+    <label>Current password<input type="password" name="current" required></label>
+    <label>New password (10+ chars)<input type="password" name="new" minlength="10" required></label>
+    <button class="primary">Change password</button>
+  </form>
+</div>
+<div class="card">
+  <h2>Two-factor</h2>
+  <p class="hint">Lost your authenticator? Ask the admin to reset your 2FA; you'll re-enroll at next sign-in.</p>
+</div>
+{% endblock %}

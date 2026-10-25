@@ -1,0 +1,7 @@
+# Values used by CI to render and validate the chart (no real environment).
+hostname: ai.example.com
+image:
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+backup:
+  namespace: examplens
+  region: us-ashburn-1

@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}{{ thread.title if thread else 'Chats' }} — Crossfact{% endblock %}
+{% block mainclass %}chatwrap{% endblock %}
+
+{% set REASONS = {
+  'side_a_failed': 'Only side B answered; side A failed or was too slow. This is a single-model answer, not a consensus.',
+  'side_b_failed': 'Only side A answered; side B failed or was too slow. This is a single-model answer, not a consensus.',
+  'comparator_failed': 'Both models answered, but comparing them failed, so both answers are shown in full.',
+  'judge_failed': 'The models still disagreed and no judge was available, so both positions are shown.',
+  'deadline': 'Stopped early to stay inside the time limit; anything unfinished is shown as it stood.',
+  'merge_failed': 'Merging failed, so both answers are shown in full.'} %}
+{% set CHIP = {'abandoned': 'interrupted', 'error': 'failed'} %}
+
+{% macro stage_view(st) -%}
+<div class="stage {{ st.stage }}">
+  <div class="stagehead">{{ st.stage }}
+    {%- if st.side %} · side {{ st.side }}{% endif %}
+    {%- if st.provider %} · {{ st.provider }}/{{ st.model }} ({{ st.effort }}){% endif %}
+    {%- if st.round %} · round {{ st.round }}{% endif %}
+    {%- if st.attempts and st.attempts > 1 %} · {{ st.attempts }} attempts{% endif %}
+    {%- if st.duration_s is defined and st.stage == 'answer' %} · {{ st.duration_s }}s{% endif %}
+    {%- if st.t is defined %} · t+{{ st.t }}s{% endif %}</div>
+  {% if st.stage == 'answer' %}
+    {% if st.substituted_from %}<div class="sub">Stood in for {{ st.substituted_from }}, which failed.</div>{% endif %}
+    <pre>{{ st.text }}</pre>
+  {% elif st.stage == 'comparator' %}
+    <div class="cmp"><b>verdict:</b> {{ st.verdict }} · <b>agreements:</b> {{ st.agreements | length }} · <b>only A:</b> {{ st.unique_a | length }} · <b>only B:</b> {{ st.unique_b | length }} · <b>conflicts:</b> {{ st.conflicts | length }}</div>
+    {% for c in st.conflicts %}<pre class="conflict">⚡ {{ c.topic }}
+A: {{ c.a_position }}
+B: {{ c.b_position }}</pre>{% endfor %}
+  {% elif st.stage == 'debate' %}<pre>A: {{ st.a }}
+
+B: {{ st.b }}</pre>
+  {% elif st.stage == 'judge' %}
+    {% for r in st.rulings %}<pre class="ruling">⚖ {{ r.topic }} → {{ r.winner }}: {{ r.reason }}</pre>{% endfor %}
+    <pre>{{ st.analysis }}</pre>
+  {% elif st.stage == 'error' %}<pre class="err">{{ st.where }}{% if st.model %} ({{ st.model }}){% endif %}{% if st.kind %} · {{ st.kind }}{% endif %}: {{ st.detail }}</pre>
+  {% elif st.stage == 'note' %}<pre>{{ st.detail }}</pre>
+  {% elif st.stage == 'final' %}<div class="cmp">outcome {{ st.outcome }}{% if st.duration_s is defined %} in {{ st.duration_s }}s{% endif %}</div>
+  {% endif %}
+</div>
+{%- endmacro %}
+
+{% block content %}
+<script type="application/json" id="boot">{{ boot | tojson }}</script>
+<aside class="threads" aria-label="Chats">
+  <a class="newchat" href="/chat">+ New chat</a>
+  {% for t in threads %}
+    <a class="thread {{ 'active' if thread and t.id == thread.id }}" href="/chat/{{ t.id }}">{{ t.title }}</a>
+  {% endfor %}
+</aside>
+
+<section class="stream">
+  <div class="msgs" id="msgs" aria-live="polite">
+    {% if not thread %}
+      <div class="empty">
+        <div class="glyph big">◇</div>
+        <p>Ask once. Both models answer, compare notes, and you get everything either one got right.</p>
+        <p class="hint">{{ used }} of {{ quota }} runs used today.</p>
+      </div>
+    {% endif %}
+    {% set ns = namespace(question='') %}
+    {% for m in msgs %}
+      {% if m.role == 'user' %}
+        {% set ns.question = m.content %}
+        <div class="msg user"><div class="bubble">{{ m.content }}</div></div>
+      {% else %}
+        {% set pl = m.pipeline or {} %}
+        {% set oc = pl.outcome or '' %}
+        <div class="msg assistant" data-mid="{{ m.id }}" data-status="{{ m.status }}"
+             data-question="{{ ns.question }}" data-mode="{{ pl.mode or 'consensus' }}"
+             data-sides='{{ (pl.sides or {}) | tojson }}' data-files="{{ pl.file_ids or '' }}">
+          <div class="verdictbar {{ oc }}"></div>
+          <div class="bubble">
+            {% if oc %}<span class="chip {{ oc }}">{{ CHIP.get(oc, oc) }}</span>{% endif %}
+            {% for r in pl.degraded or [] %}<p class="banner">{{ REASONS.get(r, r) }}</p>{% endfor %}
+            <div class="content">{{ m.content }}</div>
+            {% if m.status == 'running' %}<div class="running">running<span class="dots"></span></div>{% endif %}
+            {% if m.status == 'error' or oc in ('degraded', 'abandoned') %}<button class="retry" type="button">Retry</button>{% endif %}
+            {% if pl.stages %}
+            <details class="pipeline"><summary>Pipeline transcript ({{ pl.stages | length }} stages)</summary>
+              <div class="stages">{% for st in pl.stages %}{{ stage_view(st) }}{% endfor %}</div>
+            </details>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+    {% endfor %}
+  </div>
+
+  <form class="composer" id="composer">
+    <input type="hidden" name="thread_id" value="{{ thread.id if thread else '' }}">
+    <div class="sides">
+      <div class="side a">
+        <span class="sidelabel" title="Side A">A</span>
+        <select name="a_provider" aria-label="Side A provider"></select>
+        <select name="a_model" aria-label="Side A model"></select>
+        <select name="a_effort" aria-label="Side A effort">{% for e in efforts %}<option>{{ e }}</option>{% endfor %}</select>
+      </div>
+      <div class="side b">
+        <span class="sidelabel" title="Side B">B</span>
+        <select name="b_provider" aria-label="Side B provider"></select>
+        <select name="b_model" aria-label="Side B model"></select>
+        <select name="b_effort" aria-label="Side B effort">{% for e in efforts %}<option>{{ e }}</option>{% endfor %}</select>
+      </div>
+      <div class="side m">
+        <select name="mode" aria-label="Mode">
+          <option value="consensus">consensus (debate + judge)</option>
+          <option value="union">union only (no debate)</option>
+          <option value="single">single (side A only)</option>
+        </select>
+        <select name="file_ids" id="filepick" aria-label="Attachment">
+          <option value="">no attachment</option>
+          {% for f in files %}<option value="{{ f.id }}">{{ f.orig_name }}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="inputrow">
+      <textarea name="question" id="q" rows="2" placeholder="Ask both models…" required aria-label="Question"></textarea>
+      <button class="primary" id="send">Ask</button>
+    </div>
+    <p class="formerr" id="formerr" role="alert"></p>
+  </form>
+</section>
+{% endblock %}

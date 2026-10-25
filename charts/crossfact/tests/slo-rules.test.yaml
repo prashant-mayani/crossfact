@@ -1,0 +1,128 @@
+# promtool unit tests for the SLO and ops rules.
+# CI renders the chart, writes PrometheusRule.spec to tests/slo-rules.yaml, then:
+#   promtool check rules charts/crossfact/tests/slo-rules.yaml
+#   promtool test rules  charts/crossfact/tests/slo-rules.test.yaml
+rule_files:
+  - slo-rules.yaml
+evaluation_interval: 1m
+
+tests:
+  # --- availability: a real outage pages -----------------------------------------
+  - name: outage pages within minutes
+    interval: 30s
+    input_series:
+      - series: 'probe_success{job="crossfact-public",instance="https://ai.example.com/healthz"}'
+        values: '1x59 0x179'         # 30 min healthy, then 90 min down
+    alert_rule_test:
+      - eval_time: 100m
+        alertname: CrossfactAvailabilityFastBurn
+        exp_alerts:
+          - exp_labels: {severity: critical, slo: availability, job: crossfact-public, instance: "https://ai.example.com/healthz"}
+            exp_annotations:
+              summary: Crossfact is failing synthetic checks fast enough to burn the monthly error budget in about two days.
+              description: 100% of probes failed in the last hour.
+              runbook_url: https://github.com/OWNER/crossfact/blob/main/docs/SLO.md#availability
+
+  # --- availability: one failed probe is noise, not an incident --------------------
+  - name: a single failed probe does not page
+    interval: 30s
+    input_series:
+      - series: 'probe_success{job="crossfact-public",instance="https://ai.example.com/healthz"}'
+        values: '1x30 0 1x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: CrossfactAvailabilityFastBurn
+        exp_alerts: []
+
+  # --- consensus success: sustained degradation with real traffic alerts ----------
+  - name: half of consensus runs degraded over 6h
+    interval: 10m
+    input_series:
+      - series: 'crossfact_runs_total{namespace="crossfact",mode="consensus",outcome="agreed"}'
+        values: '0+1x36'
+      - series: 'crossfact_runs_total{namespace="crossfact",mode="consensus",outcome="degraded"}'
+        values: '0+1x36'
+    alert_rule_test:
+      - eval_time: 6h
+        alertname: CrossfactConsensusSuccessBurn
+        exp_alerts:
+          - exp_labels: {severity: warning, slo: consensus-success}
+            exp_annotations:
+              summary: Too many consensus runs are ending degraded or failed.
+              description: 50% of consensus runs in 6h were not a full two-model result.
+              runbook_url: https://github.com/OWNER/crossfact/blob/main/docs/SLO.md#consensus-success
+
+  # --- consensus success: the low-traffic guard ------------------------------------
+  - name: two bad runs out of two do not alert (below minRunsForBurnAlert)
+    interval: 10m
+    input_series:
+      - series: 'crossfact_runs_total{namespace="crossfact",mode="consensus",outcome="agreed"}'
+        values: '0x36'
+      - series: 'crossfact_runs_total{namespace="crossfact",mode="consensus",outcome="degraded"}'
+        values: '0x20 1x10 2x6'
+    alert_rule_test:
+      - eval_time: 6h
+        alertname: CrossfactConsensusSuccessBurn
+        exp_alerts: []
+
+  # --- latency: half the successful runs slower than the threshold -----------------
+  - name: slow consensus runs alert
+    interval: 10m
+    input_series:
+      - series: 'crossfact_runs_total{namespace="crossfact",mode="consensus",outcome="agreed"}'
+        values: '0+2x36'
+      - series: 'crossfact_run_duration_seconds_count{namespace="crossfact",mode="consensus",result="success"}'
+        values: '0+2x36'
+      - series: 'crossfact_run_duration_seconds_bucket{namespace="crossfact",mode="consensus",result="success",le="240.0"}'
+        values: '0+1x36'
+    alert_rule_test:
+      - eval_time: 6h
+        alertname: CrossfactConsensusLatencyBurn
+        exp_alerts:
+          - exp_labels: {severity: warning, slo: consensus-latency}
+            exp_annotations:
+              summary: Consensus runs are too often slower than 240s.
+              runbook_url: https://github.com/OWNER/crossfact/blob/main/docs/SLO.md#consensus-latency
+
+  # --- ops: pod gone, runs abandoned -------------------------------------------------
+  - name: no scrapeable pod means CrossfactDown
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="crossfact",service="crossfact"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: CrossfactDown
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: No Crossfact pod is being scraped successfully.
+              runbook_url: https://github.com/OWNER/crossfact/blob/main/docs/SLO.md#crossfactdown
+
+  - name: abandoned runs are surfaced
+    interval: 5m
+    input_series:
+      - series: 'crossfact_orphaned_runs_total{namespace="crossfact"}'
+        values: '0 0 1 1 1'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CrossfactRunsAbandoned
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: crossfact}
+            exp_annotations:
+              summary: A pod died with runs in flight; they were closed out and refunded.
+              runbook_url: https://github.com/OWNER/crossfact/blob/main/docs/SLO.md#abandoned
+
+  # --- recorded SLI values are what the docs say they are -----------------------------
+  - name: availability window counts gaps as downtime
+    interval: 30s
+    input_series:
+      # 2 hours of history, but the last hour has no samples at all (VM down)
+      - series: 'probe_success{job="crossfact-public",instance="x"}'
+        values: '1x119 _x119'
+    promql_expr_test:
+      - expr: round(crossfact:availability:ratio_window, 0.01)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{instance="x", job="crossfact-public"}'
+            value: 0.5

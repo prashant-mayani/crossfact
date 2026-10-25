@@ -1,0 +1,15 @@
+{{- if .Values.dashboards.enabled }}
+# Picked up by the Grafana sidecar (label grafana_dashboard=1, any namespace).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: crossfact-dashboards
+  labels:
+    {{- include "crossfact.labels" . | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  crossfact-overview.json: |-
+    {{- .Files.Get "dashboards/crossfact-overview.json" | nindent 4 }}
+  crossfact-slo.json: |-
+    {{- .Files.Get "dashboards/crossfact-slo.json" | nindent 4 }}
+{{- end }}

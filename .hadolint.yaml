@@ -1,0 +1,5 @@
+# DL3008 (pin apt package versions): deliberately off. Debian security fixes
+# should land on every rebuild; the base image tag is pinned and bumped by
+# Dependabot, and Trivy fails the build on fixable critical CVEs.
+ignored:
+  - DL3008

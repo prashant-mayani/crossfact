@@ -1,0 +1,7 @@
+Crossfact {{ .Chart.AppVersion }} deployed as release {{ .Release.Name }}.
+{{- if .Values.hostname }}
+Users reach it at https://{{ .Values.hostname }} (through the Cloudflare tunnel only).
+{{- else }}
+No hostname set: the synthetic availability probe is disabled.
+{{- end }}
+Run deadline {{ .Values.runDeadlineSeconds }}s; pods get {{ .Values.terminationGracePeriodSeconds }}s to drain on shutdown.

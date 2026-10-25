@@ -1,0 +1,603 @@
+{
+ "uid": "crossfact-slo",
+ "title": "Crossfact SLOs",
+ "description": "Three SLOs over 28 days. Budget remaining below 0 means the objective is missed.",
+ "tags": [
+  "crossfact"
+ ],
+ "timezone": "browser",
+ "schemaVersion": 39,
+ "version": 1,
+ "editable": true,
+ "graphTooltip": 1,
+ "refresh": "1m",
+ "time": {
+  "from": "now-24h",
+  "to": "now"
+ },
+ "templating": {
+  "list": [
+   {
+    "name": "datasource",
+    "type": "datasource",
+    "query": "prometheus",
+    "label": "Data source",
+    "current": {
+     "text": "Prometheus",
+     "value": "prometheus"
+    }
+   },
+   {
+    "name": "namespace",
+    "type": "custom",
+    "query": "crossfact",
+    "label": "Namespace",
+    "current": {
+     "text": "crossfact",
+     "value": "crossfact"
+    },
+    "hide": 2
+   }
+  ]
+ },
+ "panels": [
+  {
+   "type": "row",
+   "title": "Availability (synthetic probes, gaps count as down)",
+   "id": 1,
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 0
+   },
+   "panels": []
+  },
+  {
+   "type": "stat",
+   "title": "SLI, 28 days",
+   "description": "",
+   "targets": [
+    {
+     "expr": "crossfact:availability:ratio_window",
+     "legendFormat": "__auto",
+     "refId": "A",
+     "exemplar": false,
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     },
+     "decimals": 3
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value"
+   },
+   "id": 2,
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 0,
+    "y": 1
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Error budget remaining",
+   "description": "",
+   "targets": [
+    {
+     "expr": "crossfact:availability:error_budget_remaining",
+     "legendFormat": "__auto",
+     "refId": "A",
+     "exemplar": false,
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.25
+       },
+       {
+        "color": "green",
+        "value": 0.5
+       }
+      ]
+     },
+     "decimals": 1
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value"
+   },
+   "id": 3,
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 8,
+    "y": 1
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Error ratio by window",
+   "description": "",
+   "targets": [
+    {
+     "expr": "crossfact:availability:error_ratio_rate5m",
+     "legendFormat": "5m",
+     "refId": "A",
+     "exemplar": false
+    },
+    {
+     "expr": "crossfact:availability:error_ratio_rate1h",
+     "legendFormat": "1h",
+     "refId": "B",
+     "exemplar": false
+    },
+    {
+     "expr": "crossfact:availability:error_ratio_rate6h",
+     "legendFormat": "6h",
+     "refId": "C",
+     "exemplar": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 4,
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 16,
+    "y": 1
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "row",
+   "title": "Consensus success (full two-model results)",
+   "id": 5,
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 7
+   },
+   "panels": []
+  },
+  {
+   "type": "stat",
+   "title": "SLI, 28 days",
+   "description": "",
+   "targets": [
+    {
+     "expr": "crossfact:consensus_success:ratio_window",
+     "legendFormat": "__auto",
+     "refId": "A",
+     "exemplar": false,
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     },
+     "decimals": 3
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value"
+   },
+   "id": 6,
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 0,
+    "y": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Error budget remaining",
+   "description": "",
+   "targets": [
+    {
+     "expr": "crossfact:consensus_success:error_budget_remaining",
+     "legendFormat": "__auto",
+     "refId": "A",
+     "exemplar": false,
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.25
+       },
+       {
+        "color": "green",
+        "value": 0.5
+       }
+      ]
+     },
+     "decimals": 1
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value"
+   },
+   "id": 7,
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 8,
+    "y": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Error ratio by window, with traffic",
+   "description": "Burn alerts need enough runs in the window; see docs/SLO.md.",
+   "targets": [
+    {
+     "expr": "crossfact:consensus_success:error_ratio_rate1h",
+     "legendFormat": "1h error ratio",
+     "refId": "A",
+     "exemplar": false
+    },
+    {
+     "expr": "crossfact:consensus_success:error_ratio_rate6h",
+     "legendFormat": "6h error ratio",
+     "refId": "B",
+     "exemplar": false
+    },
+    {
+     "expr": "crossfact:consensus:runs_increase6h",
+     "legendFormat": "runs in 6h",
+     "refId": "C",
+     "exemplar": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 8,
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 16,
+    "y": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "row",
+   "title": "Consensus latency (successful runs under threshold)",
+   "id": 9,
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 14
+   },
+   "panels": []
+  },
+  {
+   "type": "stat",
+   "title": "SLI, 28 days",
+   "description": "",
+   "targets": [
+    {
+     "expr": "crossfact:consensus_latency:ratio_window",
+     "legendFormat": "__auto",
+     "refId": "A",
+     "exemplar": false,
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     },
+     "decimals": 3
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value"
+   },
+   "id": 10,
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 0,
+    "y": 15
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Error budget remaining",
+   "description": "",
+   "targets": [
+    {
+     "expr": "crossfact:consensus_latency:error_budget_remaining",
+     "legendFormat": "__auto",
+     "refId": "A",
+     "exemplar": false,
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.25
+       },
+       {
+        "color": "green",
+        "value": 0.5
+       }
+      ]
+     },
+     "decimals": 1
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value"
+   },
+   "id": 11,
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 8,
+    "y": 15
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Error ratio by window, with traffic",
+   "description": "Burn alerts need enough runs in the window; see docs/SLO.md.",
+   "targets": [
+    {
+     "expr": "crossfact:consensus_latency:error_ratio_rate1h",
+     "legendFormat": "1h error ratio",
+     "refId": "A",
+     "exemplar": false
+    },
+    {
+     "expr": "crossfact:consensus_latency:error_ratio_rate6h",
+     "legendFormat": "6h error ratio",
+     "refId": "B",
+     "exemplar": false
+    },
+    {
+     "expr": "crossfact:consensus:runs_increase6h",
+     "legendFormat": "runs in 6h",
+     "refId": "C",
+     "exemplar": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 12,
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 16,
+    "y": 15
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  }
+ ]
+}

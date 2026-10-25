@@ -1,0 +1,194 @@
+{{- if .Values.slo.enabled }}
+{{- $ns := .Release.Namespace -}}
+{{- $a := .Values.slo.availability -}}
+{{- $s := .Values.slo.consensusSuccess -}}
+{{- $l := .Values.slo.consensusLatency -}}
+{{- $min := int .Values.slo.minRunsForBurnAlert -}}
+{{- $le := printf "%.1f" (float64 $l.thresholdSeconds) -}}
+{{- $runbook := .Values.slo.runbookBaseUrl -}}
+# SLOs as code. docs/SLO.md explains every number; tests/slo-rules.test.yaml
+# (promtool) proves the alerts fire, and stay quiet, when they should.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: crossfact-slo
+  labels:
+    {{- include "crossfact.labels" . | nindent 4 }}
+spec:
+  groups:
+    # ---- SLIs over short and medium windows -----------------------------------
+    - name: crossfact-sli
+      interval: 1m
+      rules:
+        {{- range $w := list "5m" "30m" "1h" "6h" }}
+        - record: crossfact:availability:error_ratio_rate{{ $w }}
+          expr: 1 - avg_over_time(probe_success{job="crossfact-public"}[{{ $w }}])
+        {{- end }}
+        {{- range $w := list "1h" "6h" "3d" }}
+        - record: crossfact:consensus:runs_increase{{ $w }}
+          expr: sum(increase(crossfact_runs_total{namespace="{{ $ns }}",mode="consensus"}[{{ $w }}]))
+        - record: crossfact:consensus_success:error_ratio_rate{{ $w }}
+          expr: |
+            1 - (
+              sum(increase(crossfact_runs_total{namespace="{{ $ns }}",mode="consensus",outcome=~"agreed|debated|judged"}[{{ $w }}]))
+              /
+              sum(increase(crossfact_runs_total{namespace="{{ $ns }}",mode="consensus"}[{{ $w }}]))
+            )
+        - record: crossfact:consensus_latency:error_ratio_rate{{ $w }}
+          expr: |
+            1 - (
+              sum(increase(crossfact_run_duration_seconds_bucket{namespace="{{ $ns }}",mode="consensus",result="success",le="{{ $le }}"}[{{ $w }}]))
+              /
+              sum(increase(crossfact_run_duration_seconds_count{namespace="{{ $ns }}",mode="consensus",result="success"}[{{ $w }}]))
+            )
+        {{- end }}
+
+    # ---- SLIs over the whole SLO window (heavier, so every 5 minutes) ------------
+    - name: crossfact-sli-window
+      interval: 5m
+      rules:
+        # Expected-probe counting: a gap in the data (VM down, Prometheus down) is
+        # counted as downtime, not ignored. The window starts at the first probe
+        # so a new install isn't judged on days it didn't exist.
+        - record: crossfact:availability:ratio_window
+          expr: |
+            clamp_max(
+              sum_over_time(probe_success{job="crossfact-public"}[{{ .Values.slo.window }}])
+              /
+              clamp_min(
+                (time() - min_over_time(timestamp(probe_success{job="crossfact-public"})[{{ .Values.slo.window }}:1h]))
+                / {{ $a.probeIntervalSeconds }},
+                1),
+              1)
+        - record: crossfact:availability:error_budget_remaining
+          expr: 1 - ((1 - crossfact:availability:ratio_window) / (1 - {{ $a.objective }}))
+        - record: crossfact:consensus:runs_window
+          expr: sum(increase(crossfact_runs_total{namespace="{{ $ns }}",mode="consensus"}[{{ .Values.slo.window }}]))
+        - record: crossfact:consensus_success:ratio_window
+          expr: |
+            sum(increase(crossfact_runs_total{namespace="{{ $ns }}",mode="consensus",outcome=~"agreed|debated|judged"}[{{ .Values.slo.window }}]))
+            / crossfact:consensus:runs_window
+        - record: crossfact:consensus_success:error_budget_remaining
+          expr: 1 - ((1 - crossfact:consensus_success:ratio_window) / (1 - {{ $s.objective }}))
+        - record: crossfact:consensus_latency:ratio_window
+          expr: |
+            sum(increase(crossfact_run_duration_seconds_bucket{namespace="{{ $ns }}",mode="consensus",result="success",le="{{ $le }}"}[{{ .Values.slo.window }}]))
+            /
+            sum(increase(crossfact_run_duration_seconds_count{namespace="{{ $ns }}",mode="consensus",result="success"}[{{ .Values.slo.window }}]))
+        - record: crossfact:consensus_latency:error_budget_remaining
+          expr: 1 - ((1 - crossfact:consensus_latency:ratio_window) / (1 - {{ $l.objective }}))
+
+    # ---- burn-rate alerts (multiwindow, multi-burn-rate) -------------------------
+    - name: crossfact-slo-alerts
+      rules:
+        - alert: CrossfactAvailabilityFastBurn
+          # 14.4x burn = 2% of the 28-day budget in one hour. Page.
+          expr: |
+            crossfact:availability:error_ratio_rate1h > (14.4 * (1 - {{ $a.objective }}))
+            and
+            crossfact:availability:error_ratio_rate5m > (14.4 * (1 - {{ $a.objective }}))
+          for: 2m
+          labels: {severity: critical, slo: availability}
+          annotations:
+            summary: Crossfact is failing synthetic checks fast enough to burn the monthly error budget in about two days.
+            description: "{{`{{ $value | humanizePercentage }}`}} of probes failed in the last hour."
+            runbook_url: {{ $runbook }}#availability
+        - alert: CrossfactAvailabilitySlowBurn
+          expr: |
+            crossfact:availability:error_ratio_rate6h > (6 * (1 - {{ $a.objective }}))
+            and
+            crossfact:availability:error_ratio_rate30m > (6 * (1 - {{ $a.objective }}))
+          for: 15m
+          labels: {severity: warning, slo: availability}
+          annotations:
+            summary: Crossfact availability is burning error budget steadily (6x).
+            runbook_url: {{ $runbook }}#availability
+        - alert: CrossfactConsensusSuccessBurn
+          # Low traffic: require at least {{ $min }} consensus runs in the window,
+          # or one unlucky run would read as a 50% error rate.
+          expr: |
+            crossfact:consensus_success:error_ratio_rate6h > (6 * (1 - {{ $s.objective }}))
+            and crossfact:consensus_success:error_ratio_rate1h > (6 * (1 - {{ $s.objective }}))
+            and crossfact:consensus:runs_increase6h >= {{ $min }}
+          labels: {severity: warning, slo: consensus-success}
+          annotations:
+            summary: Too many consensus runs are ending degraded or failed.
+            description: "{{`{{ $value | humanizePercentage }}`}} of consensus runs in 6h were not a full two-model result."
+            runbook_url: {{ $runbook }}#consensus-success
+        - alert: CrossfactConsensusSuccessSlowBurn
+          expr: |
+            crossfact:consensus_success:error_ratio_rate3d > (1 - {{ $s.objective }})
+            and crossfact:consensus_success:error_ratio_rate6h > (1 - {{ $s.objective }})
+            and crossfact:consensus:runs_increase3d >= {{ mul $min 4 }}
+          labels: {severity: warning, slo: consensus-success}
+          annotations:
+            summary: Consensus success has been under objective for three days.
+            runbook_url: {{ $runbook }}#consensus-success
+        - alert: CrossfactConsensusLatencyBurn
+          expr: |
+            crossfact:consensus_latency:error_ratio_rate6h > (6 * (1 - {{ $l.objective }}))
+            and crossfact:consensus_latency:error_ratio_rate1h > (6 * (1 - {{ $l.objective }}))
+            and crossfact:consensus:runs_increase6h >= {{ $min }}
+          labels: {severity: warning, slo: consensus-latency}
+          annotations:
+            summary: Consensus runs are too often slower than {{ $l.thresholdSeconds }}s.
+            runbook_url: {{ $runbook }}#consensus-latency
+        - alert: CrossfactConsensusLatencySlowBurn
+          expr: |
+            crossfact:consensus_latency:error_ratio_rate3d > (1 - {{ $l.objective }})
+            and crossfact:consensus_latency:error_ratio_rate6h > (1 - {{ $l.objective }})
+            and crossfact:consensus:runs_increase3d >= {{ mul $min 4 }}
+          labels: {severity: warning, slo: consensus-latency}
+          annotations:
+            summary: Consensus latency has been under objective for three days.
+            runbook_url: {{ $runbook }}#consensus-latency
+
+    # ---- operational alerts -----------------------------------------------------------
+    - name: crossfact-ops
+      rules:
+        - alert: CrossfactDown
+          expr: absent(up{namespace="{{ $ns }}",service="crossfact"} == 1)
+          for: 5m
+          labels: {severity: critical}
+          annotations:
+            summary: No Crossfact pod is being scraped successfully.
+            runbook_url: {{ $runbook }}#crossfactdown
+        - alert: CrossfactCircuitOpen
+          expr: max by (breaker) (crossfact_circuit_state{namespace="{{ $ns }}"}) == 2
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "Calls to {{`{{ $labels.breaker }}`}} are paused after repeated failures."
+            runbook_url: {{ $runbook }}#circuit-open
+        - alert: CrossfactProviderAuthFailing
+          expr: sum by (provider) (increase(crossfact_provider_calls_total{namespace="{{ $ns }}",result="auth"}[30m])) > 0
+          labels: {severity: warning}
+          annotations:
+            summary: "{{`{{ $labels.provider }}`}} is rejecting our credentials. The Claude token expires yearly; check Vault."
+            runbook_url: {{ $runbook }}#auth
+        - alert: CrossfactQuotaExhausted
+          expr: sum by (provider, model) (increase(crossfact_provider_calls_total{namespace="{{ $ns }}",result="quota_exhausted"}[1h])) > 0
+          labels: {severity: info}
+          annotations:
+            summary: "Free quota for {{`{{ $labels.provider }}/{{ $labels.model }}`}} ran out; fallbacks are carrying the load."
+        - alert: CrossfactRunsAbandoned
+          expr: increase(crossfact_orphaned_runs_total{namespace="{{ $ns }}"}[1h]) > 0
+          labels: {severity: warning}
+          annotations:
+            summary: A pod died with runs in flight; they were closed out and refunded.
+            runbook_url: {{ $runbook }}#abandoned
+        - alert: CrossfactBackupStale
+          expr: |
+            time() - max(kube_cronjob_status_last_successful_time{namespace="{{ $ns }}",cronjob="crossfact-backup"}) > 26 * 3600
+          labels: {severity: warning}
+          annotations:
+            summary: No successful Crossfact backup in over 26 hours.
+            runbook_url: {{ $runbook }}#backups
+        - alert: CrossfactBackupVerifyStale
+          expr: |
+            time() - max(kube_cronjob_status_last_successful_time{namespace="{{ $ns }}",cronjob="crossfact-backup-verify"}) > 8 * 86400
+          labels: {severity: warning}
+          annotations:
+            summary: The weekly restore test hasn't passed in over 8 days.
+            runbook_url: {{ $runbook }}#backups
+{{- end }}

@@ -1,0 +1,805 @@
+{
+ "uid": "crossfact-overview",
+ "title": "Crossfact overview",
+ "description": "Runs, providers, and failure handling. Exemplar dots link latency points to Tempo traces.",
+ "tags": [
+  "crossfact"
+ ],
+ "timezone": "browser",
+ "schemaVersion": 39,
+ "version": 1,
+ "editable": true,
+ "graphTooltip": 1,
+ "refresh": "1m",
+ "time": {
+  "from": "now-24h",
+  "to": "now"
+ },
+ "templating": {
+  "list": [
+   {
+    "name": "datasource",
+    "type": "datasource",
+    "query": "prometheus",
+    "label": "Data source",
+    "current": {
+     "text": "Prometheus",
+     "value": "prometheus"
+    }
+   },
+   {
+    "name": "namespace",
+    "type": "custom",
+    "query": "crossfact",
+    "label": "Namespace",
+    "current": {
+     "text": "crossfact",
+     "value": "crossfact"
+    },
+    "hide": 2
+   }
+  ]
+ },
+ "panels": [
+  {
+   "type": "row",
+   "title": "Runs",
+   "id": 1,
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 0
+   },
+   "panels": []
+  },
+  {
+   "type": "stat",
+   "title": "Runs (24h)",
+   "description": "",
+   "targets": [
+    {
+     "expr": "sum(increase(crossfact_runs_total{namespace=\"$namespace\"}[24h]))",
+     "legendFormat": "__auto",
+     "refId": "A",
+     "exemplar": false,
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     },
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value"
+   },
+   "id": 2,
+   "gridPos": {
+    "h": 4,
+    "w": 6,
+    "x": 0,
+    "y": 1
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Full two-model results (24h)",
+   "description": "",
+   "targets": [
+    {
+     "expr": "sum(increase(crossfact_runs_total{namespace=\"$namespace\",outcome=~\"agreed|debated|judged|union\"}[24h])) / sum(increase(crossfact_runs_total{namespace=\"$namespace\",mode!=\"single\"}[24h]))",
+     "legendFormat": "__auto",
+     "refId": "A",
+     "exemplar": false,
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     },
+     "decimals": 1
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value"
+   },
+   "id": 3,
+   "gridPos": {
+    "h": 4,
+    "w": 6,
+    "x": 6,
+    "y": 1
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Degraded (24h)",
+   "description": "",
+   "targets": [
+    {
+     "expr": "sum(increase(crossfact_degraded_runs_total{namespace=\"$namespace\"}[24h]))",
+     "legendFormat": "__auto",
+     "refId": "A",
+     "exemplar": false,
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1
+       }
+      ]
+     },
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value"
+   },
+   "id": 4,
+   "gridPos": {
+    "h": 4,
+    "w": 6,
+    "x": 12,
+    "y": 1
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "stat",
+   "title": "In flight now",
+   "description": "",
+   "targets": [
+    {
+     "expr": "sum(crossfact_runs_in_flight{namespace=\"$namespace\"})",
+     "legendFormat": "__auto",
+     "refId": "A",
+     "exemplar": false,
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     },
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value"
+   },
+   "id": 5,
+   "gridPos": {
+    "h": 4,
+    "w": 6,
+    "x": 18,
+    "y": 1
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Runs by outcome",
+   "description": "degraded = finished without a full two-model result; abandoned = a pod died mid-run.",
+   "targets": [
+    {
+     "expr": "sum by (outcome) (increase(crossfact_runs_total{namespace=\"$namespace\"}[1h]))",
+     "legendFormat": "{{outcome}}",
+     "refId": "A",
+     "exemplar": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "stacking": {
+       "mode": "normal"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 6,
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 5
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Run duration (consensus)",
+   "description": "Click an exemplar dot to open the trace of that run.",
+   "targets": [
+    {
+     "expr": "histogram_quantile(0.5, sum by (le) (rate(crossfact_run_duration_seconds_bucket{namespace=\"$namespace\",mode=\"consensus\"}[30m])))",
+     "legendFormat": "p50",
+     "refId": "A",
+     "exemplar": true
+    },
+    {
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(crossfact_run_duration_seconds_bucket{namespace=\"$namespace\",mode=\"consensus\"}[30m])))",
+     "legendFormat": "p95",
+     "refId": "B",
+     "exemplar": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 7,
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 5
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "row",
+   "title": "Providers: who is slow, who is failing",
+   "id": 8,
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 13
+   },
+   "panels": []
+  },
+  {
+   "type": "timeseries",
+   "title": "p95 model-call latency by model",
+   "description": "Includes retries. The slowest line is the provider holding runs back.",
+   "targets": [
+    {
+     "expr": "histogram_quantile(0.95, sum by (le, provider, model) (rate(crossfact_provider_call_duration_seconds_bucket{namespace=\"$namespace\"}[30m])))",
+     "legendFormat": "{{provider}}/{{model}}",
+     "refId": "A",
+     "exemplar": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 9,
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 14
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Call outcomes",
+   "description": "",
+   "targets": [
+    {
+     "expr": "sum by (provider, result) (increase(crossfact_provider_calls_total{namespace=\"$namespace\"}[1h]))",
+     "legendFormat": "{{provider}} {{result}}",
+     "refId": "A",
+     "exemplar": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "stacking": {
+       "mode": "normal"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 10,
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 14
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Retries by cause",
+   "description": "Retries, and sides left behind because they were still running long after the other model answered (pipeline.straggler_grace_s).",
+   "targets": [
+    {
+     "expr": "sum by (provider, reason) (increase(crossfact_provider_retries_total{namespace=\"$namespace\"}[1h]))",
+     "legendFormat": "{{provider}} {{reason}}",
+     "refId": "A",
+     "exemplar": false
+    },
+    {
+     "expr": "sum by (provider, model) (increase(crossfact_straggler_cutoffs_total{namespace=\"$namespace\"}[1h]))",
+     "legendFormat": "cut off: {{provider}}/{{model}}",
+     "refId": "B",
+     "exemplar": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 11,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 22
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Circuit breakers (0 closed \u00b7 1 half-open \u00b7 2 open)",
+   "description": "",
+   "targets": [
+    {
+     "expr": "max by (breaker) (crossfact_circuit_state{namespace=\"$namespace\"})",
+     "legendFormat": "{{breaker}}",
+     "refId": "A",
+     "exemplar": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 12,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 22
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "table",
+   "title": "Substitutions (7d)",
+   "description": "A fallback model stood in for a side whose model failed.",
+   "targets": [
+    {
+     "expr": "sum by (side, from_model, to_model) (increase(crossfact_substitutions_total{namespace=\"$namespace\"}[7d])) > 0",
+     "legendFormat": "__auto",
+     "refId": "A",
+     "exemplar": false,
+     "instant": true,
+     "range": false,
+     "format": "table"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "showHeader": true
+   },
+   "id": 13,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 22
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "row",
+   "title": "Service",
+   "id": 14,
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 30
+   },
+   "panels": []
+  },
+  {
+   "type": "timeseries",
+   "title": "HTTP requests by route",
+   "description": "",
+   "targets": [
+    {
+     "expr": "sum by (route) (rate(crossfact_http_requests_total{namespace=\"$namespace\",route!=\"/static\"}[5m]))",
+     "legendFormat": "{{route}}",
+     "refId": "A",
+     "exemplar": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 15,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 31
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "HTTP p95 latency",
+   "description": "",
+   "targets": [
+    {
+     "expr": "histogram_quantile(0.95, sum by (le, route) (rate(crossfact_http_request_duration_seconds_bucket{namespace=\"$namespace\",route!=\"/static\"}[5m])))",
+     "legendFormat": "{{route}}",
+     "refId": "A",
+     "exemplar": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 16,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 31
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Draining, orphans, faults",
+   "description": "",
+   "targets": [
+    {
+     "expr": "max(crossfact_draining{namespace=\"$namespace\"})",
+     "legendFormat": "draining",
+     "refId": "A",
+     "exemplar": false
+    },
+    {
+     "expr": "sum(increase(crossfact_orphaned_runs_total{namespace=\"$namespace\"}[1h]))",
+     "legendFormat": "orphaned runs",
+     "refId": "B",
+     "exemplar": false
+    },
+    {
+     "expr": "sum(crossfact_fault_injections_active{namespace=\"$namespace\"})",
+     "legendFormat": "active faults",
+     "refId": "C",
+     "exemplar": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 17,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 31
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  }
+ ]
+}

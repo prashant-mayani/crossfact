@@ -1,0 +1,5 @@
+.DS_Store
+*.swp
+tests/
+ci-values.yaml
+dashboards/generate.py

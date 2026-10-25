@@ -1,0 +1,78 @@
+{{- if .Values.networkPolicy.enabled }}
+# Nothing reaches a Crossfact pod unless a rule below says so.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: crossfact-default-deny-ingress
+  labels:
+    {{- include "crossfact.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# The UI is reached only from the tunnel connector; metrics only from Prometheus.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: crossfact-web-ingress
+  labels:
+    {{- include "crossfact.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: web
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ .Values.networkPolicy.webFromNamespace }}}
+      ports: [{port: 8080, protocol: TCP}]
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ .Values.networkPolicy.metricsFromNamespace }}}
+      ports: [{port: 9095, protocol: TCP}]
+---
+# Egress for every Crossfact pod: DNS, traces, and the public internet (the model
+# APIs). Private ranges and link-local are excluded: no other node, VCN host,
+# or the instance-metadata service (169.254.169.254).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: crossfact-egress
+  labels:
+    {{- include "crossfact.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ .Values.networkPolicy.tracingNamespace }}}
+      ports: [{port: {{ .Values.networkPolicy.tracingPort }}, protocol: TCP}]
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10]
+---
+# Backup and restore pods (never the app) may act as the VM's OCI identity.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: crossfact-imds-egress
+  labels:
+    {{- include "crossfact.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {crossfact.io/imds: "true"}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: {cidr: {{ .Values.networkPolicy.metadataCidr }}}
+      ports: [{port: 80, protocol: TCP}]
+{{- end }}

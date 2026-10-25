@@ -1,0 +1,5 @@
+# KSV-0125 "untrusted registry": our image comes from ghcr.io, and the cluster
+# admits it only when it carries this repository's keyless cosign signature
+# (sigstore policy-controller ClusterImagePolicy). That is a stronger control
+# than a registry allowlist.
+KSV-0125

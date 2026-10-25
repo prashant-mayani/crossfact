@@ -1,0 +1,10 @@
+apiVersion: v2
+name: crossfact
+description: Two models, one answer. Claude + Gemini consensus app with SLOs, tracing and graceful drain.
+type: application
+version: 2.0.0
+appVersion: "2.0.0"
+kubeVersion: ">=1.30.0-0"
+keywords: [llm, consensus, claude, gemini]
+sources:
+  - https://github.com/OWNER/crossfact

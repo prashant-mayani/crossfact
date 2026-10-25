@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Files — Crossfact{% endblock %}
+{% block content %}
+<h1>Files</h1>
+<p class="hint">Uploads are stored on the server and deleted automatically after {{ retention }} days. Up to {{ max_mb }} MB per file. Only you can see your files.</p>
+<div class="card">
+  <form id="upform">
+    <input type="hidden" name="csrf" value="{{ s.csrf }}">
+    <input type="file" name="f" id="upfile" required>
+    <button class="primary" type="submit">Upload file</button>
+    <span id="upmsg" class="hint" role="status"></span>
+  </form>
+</div>
+<div class="card">
+  {% if files %}
+  <table class="users">
+    <tr><th>Name</th><th>Size</th><th>Uploaded</th><th></th><th></th></tr>
+    {% for f in files %}
+    <tr>
+      <td>{{ f.orig_name }}</td>
+      <td>{{ '%.1f'|format(f.size/1024) }} KB</td>
+      <td><time data-ts="{{ f.created_at | int }}"></time></td>
+      <td><a href="/files/{{ f.id }}/download">Download</a></td>
+      <td><form method="post" action="/files/{{ f.id }}/delete"><input type="hidden" name="csrf" value="{{ s.csrf }}"><button class="link">Delete</button></form></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="hint">No files yet. Upload one here, then attach it to a question from the chat composer.</p>
+  {% endif %}
+</div>
+{% endblock %}
