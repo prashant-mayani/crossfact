@@ -141,15 +141,15 @@ brings each new signed build. Fork it if you want to change the code.
 
 ## Repository map
 
-    app/              FastAPI app: auth (argon2id + TOTP, one account), threads, uploads,
-                      provider adapters, resilience, orchestrator, telemetry, lifecycle, UI;
-                      admin.py: account recovery (python -m app.admin)
-    config/           providers.example.yaml: the model registry and resilience knobs
-    scripts/          maintain.py (cleanup, backup, restore, verify), check_claude_cli.py,
-                      gameday_sim.py, prepublish-check.sh
+    app/                FastAPI app: auth (argon2id + TOTP, one account), threads, uploads,
+                        provider adapters, resilience, orchestrator, telemetry, lifecycle, UI;
+                        admin.py: account recovery (python -m app.admin)
+    config/             providers.example.yaml: the model registry and resilience knobs
+    scripts/            maintain.py (cleanup, backup, restore, verify), check_claude_cli.py,
+                        gameday_sim.py, prepublish-check.sh
     charts/crossfact/   Helm chart: Deployment (with the restore step), backup CronJobs,
-                      NetworkPolicies, ExternalSecrets, ServiceMonitor, Probe, SLO rules,
-                      dashboards (+ tests)
-    image/            pinned Claude Code (package-lock.json); only its native binary ships
-    tests/            pytest: pipeline, resilience, providers, web, admin, drain, tracing, backups
-    .github/          pipeline.yml (every change), security-history.yml (weekly)
+                        NetworkPolicies, ExternalSecrets, ServiceMonitor, Probe, SLO rules,
+                        dashboards (+ tests)
+    image/              pinned Claude Code (package-lock.json); only its native binary ships
+    tests/              pytest: pipeline, resilience, providers, web, admin, drain, tracing, backups
+    .github/            pipeline.yml (every change), security-history.yml (weekly)

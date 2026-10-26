@@ -15,7 +15,7 @@ instruction: give only the answer, or say "I don't know" when not confident.
              to beat (Zhang et al., 2025)
   moa        Mixture-of-Agents, one layer: several models answer, an aggregator
              reads them all and writes the final answer (Wang et al., 2024)
-  crossfact    the app's own pipeline (consensus mode), through the same call path.
+  crossfact  the app's own pipeline (consensus mode), through the same call path.
              A run in which a provider call failed (a timeout, a server error)
              is not scored: like a baseline's failed call, it is recorded as an
              error and tried again on a later run, with the calls that succeeded

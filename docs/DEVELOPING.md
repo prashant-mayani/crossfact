@@ -25,7 +25,7 @@ OTLP/HTTP collector works locally, e.g. Jaeger all-in-one listening on 4318).
     ruff check .                                # lint
     pytest                                      # about 225 tests, ~35 s, no network
     python charts/crossfact/dashboards/generate.py && git diff --exit-code charts/crossfact/dashboards/
-    charts/crossfact/tests/render.sh              # helm template + kubeconform + promtool rules and tests
+    charts/crossfact/tests/render.sh            # helm template + kubeconform + promtool rules and tests
     hadolint Dockerfile
     python scripts/check_claude_cli.py --bin "$(command -v claude)"   # the pinned CLI still reads its token
     python scripts/gameday_sim.py --list        # game days on the laptop: docs/RESILIENCE.md
