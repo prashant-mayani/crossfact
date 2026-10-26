@@ -68,10 +68,14 @@ changes to it, in our own words: a numeric gold target states its acceptable
 range; only the direct answer is graded; an answer that lists candidates must
 commit to one or it is *not attempted*; declining in any phrasing is *not
 attempted*. Exact matches and bare "I don't know"s skip the grader. The prompt
-asks for a bare letter; a reply that explains instead is read by the grade words
-it uses (never by a leading word "A", as in "A predicted answer of 1923
-contradicts the gold target, so it is INCORRECT"), and a reply whose letter and
-words disagree is asked again. The parser's version is part of the grader's
+asks for a bare letter, and a reply that is just a letter or just a grade word
+("Correct.") counts. A reply that explains instead is read only by the grade
+words it writes in the prompt's capitals (CORRECT, INCORRECT, NOT_ATTEMPTED):
+never by a leading word "A" ("A predicted answer of 1923 contradicts the gold
+target, so it is INCORRECT" is INCORRECT), and never by lower-case prose ("does
+not match the correct answer" says nothing about the grade). A grade word after
+a negation, a letter and words that disagree, or two different grades, and the
+grader is asked again. The parser's version is part of the grader's
 identity, so a fix to it re-grades everything from the stored replies, at no
 cost, instead of keeping grades the old parser got wrong.
 

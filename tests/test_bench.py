@@ -652,11 +652,16 @@ def test_only_unambiguous_cases_skip_the_grader(answer, gold, grade):
     ("A", "CORRECT"), ("B.", "INCORRECT"), ("(C)", "NOT_ATTEMPTED"), ("**A**", "CORRECT"), ("b\n", "INCORRECT"),
     # an explanation is read by its grade words, never by a leading word "A"
     ("A predicted answer of 1923 contradicts the gold target, so it is INCORRECT", "INCORRECT"),
-    ("The predicted answer is not correct.", "INCORRECT"), ("C) NOT ATTEMPTED", "NOT_ATTEMPTED"),
+    ("C) NOT ATTEMPTED", "NOT_ATTEMPTED"), ("Correct.", "CORRECT"), ("incorrect", "INCORRECT"),
+    ("Not attempted.", "NOT_ATTEMPTED"),
     ("A: CORRECT", "CORRECT"), ("A\nThe predicted answer matches the gold target.", "CORRECT"),
     ("Grade: C (NOT_ATTEMPTED)", "NOT_ATTEMPTED"), ("NOT_ATTEMPTED", "NOT_ATTEMPTED"),
     ("The grade is A", "CORRECT"), ("Answer: B.", "INCORRECT"),
-    # ambiguous or no grade at all: ask again
+    # ambiguous or no grade at all: ask again. Lower-case prose is not a grade.
+    ("The predicted answer does not match the correct answer.", None),
+    ("The predicted answer isn't correct; it names a different person.", None),
+    ("The response gives the wrong year, not the correct one.", None),
+    ("The predicted answer is not correct.", None), ("The predicted answer is NOT CORRECT.", None),
     ("A: INCORRECT", None), ("A\nThis is INCORRECT because", None), ("CORRECT, not INCORRECT", None),
     ("I would say A", None), ("A cat sat on the mat", None), ("maybe", None), ("", None),
 ])

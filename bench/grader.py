@@ -142,36 +142,51 @@ def auto_grade(answer: str | None, gold: str) -> tuple[str, str] | None:
 
 # Part of the grader's id, so grades are cached per parser: a change to parse()
 # re-grades everything from the cached replies (no new calls), never mixes.
-PARSER_VERSION = 2
-BARE = re.compile(r"^[\W_]*([ABC])[\W_]*$")  # "A", "B.", "(C)", "**A**"
+PARSER_VERSION = 3
+BARE = re.compile(r"^[\W_]*([ABC])[\W_]*$", re.I)  # "A", "b.", "(C)", "**A**"
+JUST_A_WORD = re.compile(r"^[\W_]*(NOT[ _]ATTEMPTED|INCORRECT|CORRECT)[\W_]*$", re.I)  # "Correct.", "not attempted"
 LEAD = re.compile(r"^[\W_]*([ABC])\s*[:.)\]-]")  # "A: CORRECT", "B) ..."
-LABELLED = re.compile(r"\b(?:GRADE|ANSWER|LETTER|CHOICE)\s*(?:IS|:|=|-)?\s*[\"'(\[*]*([ABC])[\"')\]*]*[.!]?\s*$")
+LABELLED = re.compile(r"\b(?i:grade|answer|letter|choice)\s*(?i:is|:|=|-)?\s*[\"'(\[*]*([ABC])[\"')\]*]*[.!]?\s*$")
+# Grade words count only in the capitals the grading prompt uses: in an explanation,
+# "the correct answer" or "isn't correct" says nothing about the grade.
+GRADE_WORD = re.compile(r"\b(NOT[ _]ATTEMPTED|INCORRECT|CORRECT)\b")
+NEGATED = re.compile(r"(?i:\b(?:not|never|no)\s+|n't\s+)$")  # "NOT CORRECT", "isn't CORRECT": ask again
 
 
-def _grade_words(t: str) -> set[str]:
-    t = re.sub(r"\bNOT[ _]ATTEMPTED\b", " NOT_ATTEMPTED ", t)
-    t = re.sub(r"\bNOT\s+(?:FULLY\s+|ENTIRELY\s+)?CORRECT\b", " INCORRECT ", t)
-    return set(re.findall(r"\b(NOT_ATTEMPTED|INCORRECT|CORRECT)\b", t))
+def _grade(word: str) -> str:
+    w = word.upper()
+    return "NOT_ATTEMPTED" if w.startswith("NOT") else w
 
 
 def parse(text: str) -> str | None:
     """The grade in a grader's reply, or None to ask again.
 
-    The template asks for a bare letter. A reply that explains instead is read by
-    the grade words it uses, never by a leading word "A" ("A predicted answer of
-    1923 contradicts the gold target, so it is INCORRECT" is INCORRECT). A reply
-    whose letter and words disagree, or that names two different grades, is
-    ambiguous. Last, a letter labelled as the grade ("The grade is A", "Answer: B")."""
-    t = (text or "").strip().upper()
+    The template asks for a bare letter, and a reply that is just a letter or
+    just a grade word ("Correct.") is read as one. A reply that explains instead
+    is read by the grade words it writes in the prompt's capitals (CORRECT,
+    INCORRECT, NOT_ATTEMPTED), never by a leading word "A" ("A predicted answer
+    of 1923 contradicts the gold target, so it is INCORRECT" is INCORRECT) and
+    never by lower-case prose ("does not match the correct answer" says nothing).
+    A grade word after a negation, a letter and words that disagree, or two
+    different grades are ambiguous. Last, a letter labelled as the grade
+    ("The grade is A", "Answer: B"). Anything else: ask again."""
+    t = (text or "").strip()
     if not t:
         return None
     m = BARE.match(t)
     if m:
-        return GRADES[m.group(1)]
-    found = _grade_words(t)
+        return GRADES[m.group(1).upper()]
+    m = JUST_A_WORD.match(t)
+    if m:
+        return _grade(m.group(1))
+    found = set()
+    for m in GRADE_WORD.finditer(t):
+        if NEGATED.search(t[max(0, m.start() - 12):m.start()]):
+            return None
+        found.add(_grade(m.group(1)))
     first = BARE.match(t.splitlines()[0].strip()) or LEAD.match(t)  # "A" on its own line, or "A: ..."
     if first:
-        found.add(GRADES[first.group(1)])
+        found.add(GRADES[first.group(1).upper()])
     if len(found) == 1:
         return found.pop()
     if found:
