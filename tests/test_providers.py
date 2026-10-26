@@ -332,3 +332,33 @@ def test_a_model_can_opt_out_of_its_providers_reasoning_settings(env, monkeypatc
     assert providers._ask_openai(p, "qwen/qwen3.8-27b", "high", "q", None, 30) == "Paris"
     body = fake.requests[0]["json"]
     assert "reasoning_effort" not in body and body["reasoning_format"] == "hidden"
+
+
+def test_token_counts_come_back_with_the_answer(env, monkeypatch, account_id):
+    """The harness budgets Groq's tokens per day: the adapters pass on what the provider reports."""
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    monkeypatch.setenv("CLOUDFLARE_AI_TOKEN", "cf-test")
+    body = {**chat_body("Paris"), "usage": {"prompt_tokens": 40, "completion_tokens": 260, "total_tokens": 300}}
+    monkeypatch.setattr(providers.httpx, "post", FakeHTTP((200, body)))
+    got = providers._ask_openai(GROQ, "openai/gpt-oss-120b", "low", "q", None, 30)
+    assert got == "Paris" and got.usage == {"input": 40, "output": 260, "total": 300}
+    responses = {"result": {"output_text": "Paris", "usage": {"input_tokens": 12, "output_tokens": 30}}}
+    monkeypatch.setattr(providers.httpx, "post", FakeHTTP((200, responses)))
+    got = providers._ask_openai(WORKERS_AI, "@cf/openai/gpt-oss-120b", "low", "q", None, 30)
+    assert got.usage == {"input": 12, "output": 30, "total": 42}
+    monkeypatch.setattr(providers.httpx, "post", FakeHTTP((200, chat_body("Paris"))))
+    assert providers._ask_openai(GROQ, "openai/gpt-oss-120b", "low", "q", None, 30).usage is None
+
+
+@pytest.mark.parametrize("status", [413, 429])
+def test_a_request_over_the_per_minute_token_limit_fails_fast(env, monkeypatch, status):
+    """Groq's free tier allows 8K tokens a minute; a judge prompt bigger than that never
+    fits, so retrying it only spends the run's time before the next judge takes it."""
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    err = {"error": {"message": "Request too large for model `openai/gpt-oss-120b` on tokens per minute (TPM): "
+                                "Limit 8000, Requested 9512, please reduce your message size and try again.",
+                     "type": "tokens", "code": "rate_limit_exceeded"}}
+    monkeypatch.setattr(providers.httpx, "post", FakeHTTP((status, err)))
+    with pytest.raises(ProviderError) as e:
+        providers._ask_openai(GROQ, "openai/gpt-oss-120b", "low", "q", None, 30)
+    assert e.value.kind is ErrorKind.BAD_REQUEST

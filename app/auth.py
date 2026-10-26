@@ -125,20 +125,27 @@ def read_session(cookie_val: str | None) -> dict | None:
 
 # ---- the one account ------------------------------------------------------------------
 
-def ensure_owner() -> dict:
+NO_ACCOUNT = ("No account exists yet: admin_bootstrap_password isn't set. Store it in Vault (the deploy "
+              "repo's scripts/set-secret.sh admin_bootstrap_password), wait a minute, and sign in with it.")
+
+
+def ensure_owner(password: str | None = None, quiet: bool = False) -> dict | None:
     """Exactly one account can sign in: the owner.
 
     An empty database gets one named "admin", with the Vault-held bootstrap
-    password (rename it with `python -m app.admin rename`). A database from a
+    password (rename it with `python -m app.admin rename`). Without that password
+    there is no account at all, never a default one: sign-in says what to set, and
+    the account is created at the first sign-in after it is set. A database from a
     multi-user version keeps its earliest admin as the owner and disables the
     others; their chats stay in the database (and backups) until
     `python -m app.admin purge-others` deletes them."""
     users = db.all_users()  # oldest first
     if not users:
-        pw = try_secret("admin_bootstrap_password")
+        pw = password or try_secret("admin_bootstrap_password")
         if not pw:
-            log.warning("admin_bootstrap_password is not set; using an insecure default. Set it in Vault.")
-            pw = "change-me-now"
+            if not quiet:
+                log.error(NO_ACCOUNT)
+            return None
         db.create_user(OWNER_DEFAULT_USERNAME, hash_pw(pw), role="admin")
         return db.get_user(username=OWNER_DEFAULT_USERNAME)
     owner = next((u for u in users if u["role"] == "admin" and not u["disabled"]),

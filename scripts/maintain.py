@@ -12,8 +12,8 @@ VM's own identity: the chart is public code, and nothing it runs may act as the 
   daily     cleanup, then backup                      (the nightly CronJob)
   restore   pull crossfact-latest.tar.gz if no database exists (--force to overwrite)
   verify    download the latest backup and prove it opens: SQLite integrity_check
-            and row counts; and check the bucket still fits the free 20 GB of
-            Object Storage                            (the weekly CronJob)
+            and row counts; and check the bucket still fits the free Object
+            Storage allowance                         (the weekly CronJob)
 
 Two failure modes this guards against, both of which would silently lose data:
   * restore treating "can't read the backup" as "there is no backup", so the
@@ -48,9 +48,11 @@ DEFAULT_KEY_FILE = "/var/run/secrets/crossfact-backup/backup_api_private_key"
 # Archives are staged on the data volume, not in /tmp: uploads can outgrow a
 # small emptyDir, and restore must not hold a whole backup in memory.
 STAGING_PREFIX = ".staging-"
-# Always Free Object Storage is 20 GB in total (current objects and kept versions).
-# Fail the weekly verify job above this, so an alert fires while there is room left.
-BUCKET_BUDGET_GB = float(os.environ.get("CROSSFACT_BUCKET_BUDGET_GB", "15"))
+# Always Free Object Storage is 10 GB of Standard storage on a paid account or a Free
+# Trial, 20 GB only once an account is Always Free only (current objects and kept
+# versions count). Fail the weekly verify job above this, so an alert fires while
+# there is room left under the smaller allowance.
+BUCKET_BUDGET_GB = float(os.environ.get("CROSSFACT_BUCKET_BUDGET_GB", "8"))
 # How long restore keeps retrying errors other than "no backup yet" before failing
 # (a new API key or policy can take a minute or two to start working).
 RESTORE_RETRY_S = float(os.environ.get("CROSSFACT_RESTORE_RETRY_S", "300"))
@@ -310,19 +312,21 @@ def restore(force: bool = False) -> None:
                              "the volume was changed. Restore an older backup with scripts/restore.sh in the "
                              "deploy repository.")
         counts = _counts(restored)
-        # Only now touch the volume. Stale journal files would be replayed over the restored copy.
-        for suffix in ("-wal", "-shm"):
-            try:
-                os.remove(db.db_file() + suffix)
-            except FileNotFoundError:
-                pass
-        os.replace(restored, db.db_file())
+        # Only now touch the volume, and the database last: its presence is what tells
+        # the next start that a restore finished. Killed before that, the next start
+        # finds no database and restores again; files first, so none are ever lost.
         uploads = os.path.join(out, "uploads")
         if os.path.isdir(uploads):
             target = os.path.join(data_dir, "uploads")
             if os.path.isdir(target) and not os.path.islink(target):
                 shutil.rmtree(target)
             os.replace(uploads, target)
+        for suffix in ("-wal", "-shm"):  # stale journal files would be replayed over the restored copy
+            try:
+                os.remove(db.db_file() + suffix)
+            except FileNotFoundError:
+                pass
+        os.replace(restored, db.db_file())
     # The backup's age is the data lost in a rebuild (the recovery point); the DR drill reports it.
     headers = getattr(obj, "headers", None) or {}
     age_min = round(_age_hours(headers) * 60) if "last-modified" in headers else None
@@ -357,7 +361,8 @@ def verify() -> None:
                          "kubectl -n crossfact logs job/<latest crossfact-backup job>)")
     if size_gb is not None and size_gb > BUCKET_BUDGET_GB:
         raise SystemExit(f"backup bucket holds {size_gb:.1f} GB, over the {BUCKET_BUDGET_GB:.0f} GB budget "
-                         "(Always Free Object Storage is 20 GB): shorten backup retention (terraform "
+                         "(Always Free Object Storage is 10 GB of Standard storage on a paid or trial account, "
+                         "20 GB on an Always Free-only one): shorten backup retention (terraform "
                          "backup_retention_days) or upload retention (chart config.uploads.retention_days)")
 
 

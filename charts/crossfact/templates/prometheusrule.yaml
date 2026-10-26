@@ -34,6 +34,10 @@ spec:
               /
               sum(increase(crossfact_runs_total{namespace="{{ $ns }}",mode="consensus"}[{{ $w }}]))
             )
+        # The latency SLI is over successful runs only, so its low-traffic guard counts
+        # those: seven failed runs and one slow success is one slow run, not eight.
+        - record: crossfact:consensus_latency:runs_increase{{ $w }}
+          expr: sum(increase(crossfact_run_duration_seconds_count{namespace="{{ $ns }}",mode="consensus",result="success"}[{{ $w }}]))
         - record: crossfact:consensus_latency:error_ratio_rate{{ $w }}
           expr: |
             1 - (
@@ -128,7 +132,7 @@ spec:
           expr: |
             crossfact:consensus_latency:error_ratio_rate6h > (6 * (1 - {{ $l.objective }}))
             and crossfact:consensus_latency:error_ratio_rate1h > (6 * (1 - {{ $l.objective }}))
-            and crossfact:consensus:runs_increase6h >= {{ $min }}
+            and crossfact:consensus_latency:runs_increase6h >= {{ $min }}
           labels: {severity: warning, slo: consensus-latency}
           annotations:
             summary: Consensus runs are too often slower than {{ $l.thresholdSeconds }}s.
@@ -137,7 +141,7 @@ spec:
           expr: |
             crossfact:consensus_latency:error_ratio_rate3d > (1 - {{ $l.objective }})
             and crossfact:consensus_latency:error_ratio_rate6h > (1 - {{ $l.objective }})
-            and crossfact:consensus:runs_increase3d >= {{ mul $min 4 }}
+            and crossfact:consensus_latency:runs_increase3d >= {{ mul $min 4 }}
           labels: {severity: warning, slo: consensus-latency}
           annotations:
             summary: Consensus latency has been under objective for three days.
@@ -209,8 +213,19 @@ spec:
           # The app pod's restore step keeps failing: the volume has no database and
           # the backup can't be read. The app stays down on purpose. CrossfactDown
           # pages for the outage; this one says why.
+          # Counted by restarts, not by the CrashLoopBackOff state: each attempt
+          # retries for about 4.5 minutes before it exits, and the wait between
+          # restarts tops out at 5 minutes, so that state never lasts the 5 minutes
+          # this alert waits for. A step that can't start at all (its key missing)
+          # shows as a waiting reason instead. Either way, only while it isn't done.
           expr: |
-            max by (pod) (kube_pod_init_container_status_waiting_reason{namespace="{{ $ns }}",container="restore",reason=~"CrashLoopBackOff|CreateContainerConfigError|CreateContainerError"}) > 0
+            (
+              max by (pod) (increase(kube_pod_init_container_status_restarts_total{namespace="{{ $ns }}",container="restore"}[15m])) > 0
+              or
+              max by (pod) (kube_pod_init_container_status_waiting_reason{namespace="{{ $ns }}",container="restore",reason=~"CreateContainerConfigError|CreateContainerError"}) > 0
+            )
+            and on (pod)
+            max by (pod) (kube_pod_init_container_status_ready{namespace="{{ $ns }}",container="restore"}) == 0
           for: 5m
           labels: {severity: warning}
           annotations:

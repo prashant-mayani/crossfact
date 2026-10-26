@@ -23,7 +23,7 @@ OTLP/HTTP collector works locally, e.g. Jaeger all-in-one listening on 4318).
 ## Checks (the same ones CI runs)
 
     ruff check .                                # lint
-    pytest                                      # about 190 tests, ~30 s, no network
+    pytest                                      # about 225 tests, ~35 s, no network
     python charts/crossfact/dashboards/generate.py && git diff --exit-code charts/crossfact/dashboards/
     charts/crossfact/tests/render.sh              # helm template + kubeconform + promtool rules and tests
     hadolint Dockerfile

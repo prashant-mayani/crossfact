@@ -31,9 +31,17 @@ import time
 from . import auth, db
 
 
+class NoAccount(SystemExit):
+    pass
+
+
 def _owner() -> dict:
     db.init_db()
-    return auth.ensure_owner()
+    u = auth.ensure_owner()
+    if u is None:
+        raise NoAccount("no account exists yet (admin_bootstrap_password isn't set): "
+                        "run `python -m app.admin set-password` to create it with a password you choose")
+    return u
 
 
 def _drop_sessions(uid: str) -> int:
@@ -67,7 +75,8 @@ def reset_2fa(_args) -> int:
 
 
 def set_password(args) -> int:
-    u = _owner()
+    db.init_db()
+    u = auth.ensure_owner()  # None: no account yet; this command creates it
     if args.generate:
         pw = secrets.token_urlsafe(18)
     elif sys.stdin.isatty():
@@ -80,6 +89,11 @@ def set_password(args) -> int:
     if len(pw) < 10:
         print("use at least 10 characters; nothing changed", file=sys.stderr)
         return 1
+    if u is None:
+        u = auth.ensure_owner(password=pw)
+        print(f"created the account {u['username']}" + (f" with the password (shown once): {pw}" if args.generate
+                                                          else ""))
+        return 0
     db.update_user(u["id"], pw_hash=auth.hash_pw(pw))
     n = _drop_sessions(u["id"])
     db.lockout_clear(f"u:{u['username']}")

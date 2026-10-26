@@ -28,6 +28,17 @@ budgets:
   gemini/gemini-3.5-flash-lite: 450
   workers_ai_chat/@cf/meta/llama-3.3-70b-instruct-fp8-fast: 200
 
+# Tokens per UTC day, from the counts Groq reports (its free tier allows 200K per
+# model per day, reasoning included): the run stops just under Groq's own limit.
+token_budgets:
+  groq/openai/gpt-oss-120b: 190000
+  groq/qwen/qwen3.8-27b: 190000
+
+# Sharing with a deployed app: Groq's limits are per organization and Workers
+# AI's allowance per account, so these budgets would leave your app's judge
+# nothing for days. Run before you deploy, or pass --leave-for-app 0.5 (half of
+# every budget, so about twice as long). See docs/EVAL.md.
+
 # Requests per minute, to stay under per-minute limits (Groq: 30 requests and
 # 8K tokens a minute). A call refused for rate anyway waits and tries again.
 pace:
@@ -88,5 +99,8 @@ systems:
     aggregator: groq/openai/gpt-oss-120b
   - {name: crossfact, kind: crossfact, side_a: groq/openai/gpt-oss-120b, side_b: gemini/gemini-3.5-flash-lite}
 
-# Paired comparisons are against the best single model by F1 (or name one here).
-reference: best_single
+# The headline, fixed before the run: Crossfact against the best single model by F1,
+# on wrong answers and on F1 (Holm-adjusted over the two). Every other comparison
+# in the report is secondary and Holm-adjusted across the table.
+primary: {system: crossfact}
+reference: best_single   # the best single model by F1 (or name a system)

@@ -84,6 +84,22 @@ tests:
               summary: Consensus runs are too often slower than 240s.
               runbook_url: https://github.com/OWNER/crossfact/blob/main/docs/SLO.md#consensus-latency
 
+  - name: one slow success among failed runs is one slow run, not a latency burn
+    interval: 10m
+    input_series:
+      - series: 'crossfact_runs_total{namespace="crossfact",mode="consensus",outcome="degraded"}'
+        values: '0x20 1 2 3 4 5 6 7 7x8'
+      - series: 'crossfact_runs_total{namespace="crossfact",mode="consensus",outcome="agreed"}'
+        values: '0x33 1 1 1'
+      - series: 'crossfact_run_duration_seconds_count{namespace="crossfact",mode="consensus",result="success"}'
+        values: '0x33 1 1 1'
+      - series: 'crossfact_run_duration_seconds_bucket{namespace="crossfact",mode="consensus",result="success",le="240.0"}'
+        values: '0x36'
+    alert_rule_test:
+      - eval_time: 6h
+        alertname: CrossfactConsensusLatencyBurn
+        exp_alerts: []
+
   # --- ops: pod gone, runs abandoned -------------------------------------------------
   - name: no scrapeable pod means CrossfactDown
     interval: 1m
@@ -113,11 +129,17 @@ tests:
               summary: A pod died with runs in flight; they were closed out and refunded.
               runbook_url: https://github.com/OWNER/crossfact/blob/main/docs/SLO.md#abandoned
 
-  - name: a restore that cannot read the backup is named as the cause
+  # Each restore attempt retries for about 4.5 minutes, exits, and waits up to
+  # 5 minutes (kubelet's cap) before the next one: the waiting state comes and goes.
+  - name: a restore that keeps failing slowly is named as the cause
     interval: 1m
     input_series:
+      - series: 'kube_pod_init_container_status_restarts_total{namespace="crossfact",pod="crossfact-7d9-x",container="restore"}'
+        values: '0x5 1x10 2x10 3x10'
       - series: 'kube_pod_init_container_status_waiting_reason{namespace="crossfact",pod="crossfact-7d9-x",container="restore",reason="CrashLoopBackOff"}'
-        values: '0x5 1x10'
+        values: '0x5 1x4 0x5 1x4 0x5 1x4 0x5'
+      - series: 'kube_pod_init_container_status_ready{namespace="crossfact",pod="crossfact-7d9-x",container="restore"}'
+        values: '0x40'
     alert_rule_test:
       - eval_time: 8m
         alertname: CrossfactRestoreBlocked
@@ -129,6 +151,51 @@ tests:
             exp_annotations:
               summary: "The app is held down: its restore step can't read the backup (crossfact-7d9-x)."
               runbook_url: https://github.com/OWNER/crossfact/blob/main/docs/SLO.md#restore-blocked
+      - eval_time: 35m
+        alertname: CrossfactRestoreBlocked
+        exp_alerts:
+          - exp_labels: {severity: warning, pod: crossfact-7d9-x}
+            exp_annotations:
+              summary: "The app is held down: its restore step can't read the backup (crossfact-7d9-x)."
+              runbook_url: https://github.com/OWNER/crossfact/blob/main/docs/SLO.md#restore-blocked
+
+  - name: a restore step that can't start (its key missing) is named as the cause
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_init_container_status_restarts_total{namespace="crossfact",pod="crossfact-7d9-y",container="restore"}'
+        values: '0x15'
+      - series: 'kube_pod_init_container_status_waiting_reason{namespace="crossfact",pod="crossfact-7d9-y",container="restore",reason="CreateContainerConfigError"}'
+        values: '1x15'
+      - series: 'kube_pod_init_container_status_ready{namespace="crossfact",pod="crossfact-7d9-y",container="restore"}'
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CrossfactRestoreBlocked
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: CrossfactRestoreBlocked
+        exp_alerts:
+          - exp_labels: {severity: warning, pod: crossfact-7d9-y}
+            exp_annotations:
+              summary: "The app is held down: its restore step can't read the backup (crossfact-7d9-y)."
+              runbook_url: https://github.com/OWNER/crossfact/blob/main/docs/SLO.md#restore-blocked
+
+  - name: a restore that succeeds on its second try stays quiet
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_init_container_status_restarts_total{namespace="crossfact",pod="crossfact-7d9-z",container="restore"}'
+        values: '0x5 1x25'
+      - series: 'kube_pod_init_container_status_waiting_reason{namespace="crossfact",pod="crossfact-7d9-z",container="restore",reason="CrashLoopBackOff"}'
+        values: '0x5 1x1 0x24'
+      - series: 'kube_pod_init_container_status_ready{namespace="crossfact",pod="crossfact-7d9-z",container="restore"}'
+        values: '0x7 1x23'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: CrossfactRestoreBlocked
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: CrossfactRestoreBlocked
+        exp_alerts: []
 
   - name: a nightly check that stops finishing is noticed after three days
     interval: 6h

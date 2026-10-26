@@ -140,16 +140,44 @@ def auto_grade(answer: str | None, gold: str) -> tuple[str, str] | None:
     return None
 
 
+# Part of the grader's id, so grades are cached per parser: a change to parse()
+# re-grades everything from the cached replies (no new calls), never mixes.
+PARSER_VERSION = 2
+BARE = re.compile(r"^[\W_]*([ABC])[\W_]*$")  # "A", "B.", "(C)", "**A**"
+LEAD = re.compile(r"^[\W_]*([ABC])\s*[:.)\]-]")  # "A: CORRECT", "B) ..."
+LABELLED = re.compile(r"\b(?:GRADE|ANSWER|LETTER|CHOICE)\s*(?:IS|:|=|-)?\s*[\"'(\[*]*([ABC])[\"')\]*]*[.!]?\s*$")
+
+
+def _grade_words(t: str) -> set[str]:
+    t = re.sub(r"\bNOT[ _]ATTEMPTED\b", " NOT_ATTEMPTED ", t)
+    t = re.sub(r"\bNOT\s+(?:FULLY\s+|ENTIRELY\s+)?CORRECT\b", " INCORRECT ", t)
+    return set(re.findall(r"\b(NOT_ATTEMPTED|INCORRECT|CORRECT)\b", t))
+
+
 def parse(text: str) -> str | None:
+    """The grade in a grader's reply, or None to ask again.
+
+    The template asks for a bare letter. A reply that explains instead is read by
+    the grade words it uses, never by a leading word "A" ("A predicted answer of
+    1923 contradicts the gold target, so it is INCORRECT" is INCORRECT). A reply
+    whose letter and words disagree, or that names two different grades, is
+    ambiguous. Last, a letter labelled as the grade ("The grade is A", "Answer: B")."""
     t = (text or "").strip().upper()
-    m = re.match(r"^\W*([ABC])\b", t) or re.search(r"\b([ABC])\W*$", t)
+    if not t:
+        return None
+    m = BARE.match(t)
     if m:
         return GRADES[m.group(1)]
-    for word, grade in (("NOT_ATTEMPTED", "NOT_ATTEMPTED"), ("NOT ATTEMPTED", "NOT_ATTEMPTED"),
-                        ("INCORRECT", "INCORRECT"), ("CORRECT", "CORRECT")):
-        if word in t:
-            return grade
-    return None
+    found = _grade_words(t)
+    first = BARE.match(t.splitlines()[0].strip()) or LEAD.match(t)  # "A" on its own line, or "A: ..."
+    if first:
+        found.add(GRADES[first.group(1)])
+    if len(found) == 1:
+        return found.pop()
+    if found:
+        return None
+    m = LABELLED.search(t)
+    return GRADES[m.group(1)] if m else None
 
 
 class Grader:
@@ -159,7 +187,7 @@ class Grader:
         self.calls = calls
         self.provider, self.model, self.effort = model_spec(spec["model"], spec.get("effort", "off"))
         self.template, self.template_sha = template, template_sha
-        self.id = f"{self.provider}/{self.model}@{self.effort}#{template_sha[:12]}"
+        self.id = f"{self.provider}/{self.model}@{self.effort}#{template_sha[:12]}/parse{PARSER_VERSION}"
 
     def key(self, qid: str, answer: str | None) -> str:
         return hashlib.sha256(f"{self.id}|{qid}|{normalize(answer)}".encode()).hexdigest()

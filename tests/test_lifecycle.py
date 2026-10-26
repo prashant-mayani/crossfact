@@ -73,3 +73,32 @@ def test_mark_abandoned_is_first_writer_wins(env):
     mid = _running(uid, age_s=600)
     assert db.mark_abandoned(mid, "gone") is True
     assert db.mark_abandoned(mid, "gone") is False
+
+
+def test_a_new_pod_closes_out_orphans_only_after_its_first_scrape(env, monkeypatch):
+    """A run a dead pod left behind is counted by the pod that closes it out. Counted
+    before Prometheus first reads the new pod, the event is lost to increase()."""
+    import app.config as config
+    from app import telemetry as tm
+    from app.lifecycle import LIFECYCLE
+
+    db.init_db()
+    uid = db.create_user("u", "x")
+    dead = _running(uid, age_s=600)
+    monkeypatch.setitem(config.cfg(), "lifecycle", {"heartbeat_s": 0.02, "orphan_after_s": 90,
+                                                     "sweep_every_s": 60, "first_sweep_max_s": 600})
+    monkeypatch.setattr(tm.SCRAPED, "seen", __import__("threading").Event())
+    before = tm.ORPHANS._value.get()
+    LIFECYCLE.start()
+    try:
+        time.sleep(0.3)
+        assert db.get_message(dead)["status"] == "running"  # not yet: nothing has read the counter at 0
+        list(tm.REGISTRY.collect())  # Prometheus scrapes
+        for _ in range(100):
+            if db.get_message(dead)["status"] != "running":
+                break
+            time.sleep(0.02)
+        assert db.get_message(dead)["status"] == "error"
+        assert tm.ORPHANS._value.get() == before + 1
+    finally:
+        LIFECYCLE.stop()

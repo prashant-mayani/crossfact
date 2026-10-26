@@ -14,7 +14,7 @@ import logging
 import os
 import threading
 
-from prometheus_client import Counter, Gauge, Histogram, Info, start_http_server
+from prometheus_client import REGISTRY, Counter, Gauge, Histogram, Info, start_http_server
 
 log = logging.getLogger("crossfact.telemetry")
 
@@ -45,6 +45,25 @@ CIRCUIT_TRANSITIONS = Counter("crossfact_circuit_transitions", "Breaker state ch
 ORPHANS = Counter("crossfact_orphaned_runs", "Runs found abandoned by a dead pod and closed out")
 DRAINING = Gauge("crossfact_draining", "1 while this pod is draining for shutdown")
 FAULTS_ACTIVE = Gauge("crossfact_fault_injections_active", "Active injected faults", ["target", "mode"])
+
+class _ScrapeWatch:
+    """Notes that something has read this pod's metrics: on the metrics port, only
+    Prometheus can. Counting an event before the first scrape loses it (increase()
+    starts from the first sample it sees), so startup bookkeeping waits for this."""
+
+    def __init__(self):
+        self.seen = threading.Event()
+
+    def describe(self):
+        return []
+
+    def collect(self):
+        self.seen.set()
+        return []
+
+
+SCRAPED = _ScrapeWatch()
+REGISTRY.register(SCRAPED)
 
 _metrics_started = False
 _metrics_lock = threading.Lock()
@@ -94,6 +113,21 @@ def init_tracing(tracing_cfg: dict, version: str) -> None:
     trace.set_tracer_provider(provider)
     _tracing_ready = True
     log.info("tracing -> %s", endpoint)
+
+
+def shutdown_tracing(timeout_s: float = 10.0) -> None:
+    """Flush and stop the span exporter. Spans are sent in batches, so without this
+    the last few (the runs a drain waited for) die with the process."""
+    global _tracing_ready
+    if not _tracing_ready or trace is None:
+        return
+    provider = trace.get_tracer_provider()
+    try:
+        provider.force_flush(int(timeout_s * 1000))
+        provider.shutdown()
+    except Exception:  # an unreachable collector must not hang the exit
+        log.warning("could not flush traces at shutdown", exc_info=True)
+    _tracing_ready = False
 
 
 def tracer():

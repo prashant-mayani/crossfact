@@ -8,10 +8,13 @@ nothing. Only successful calls are cached. A run that must measure today's
 models (the nightly) passes fresh_after: it reuses only calls made since it
 started, so within the run a shared answer is still asked once.
 
-Budgets: free tiers cap requests per day per model. A budget here is our own,
-lower cap per (provider, model) per UTC day; a provider saying its daily quota
-is gone counts as the cap being reached. Either way the run stops with
-BudgetExhausted and picks up where it left off on the next run.
+Budgets: free tiers cap requests per day per model, and Groq also tokens per
+day (reasoning included). A budget here is our own, lower cap per (provider,
+model) per UTC day, in requests or, from the counts the provider reports, in
+tokens; a provider saying its daily quota is gone counts as the cap being
+reached. Either way the run stops with BudgetExhausted and picks up where it
+left off on the next run. `share` scales every budget, to leave the rest of each
+allowance to a deployed app that uses the same accounts.
 
 Per-minute limits are pacing, not failures: an optional requests-per-minute
 pace per model spaces calls out, and a call refused for rate (after the app's
@@ -53,9 +56,12 @@ def call_key(provider: str, model: str, effort: str, prompt: str, sample: int = 
 
 class Calls:
     def __init__(self, store: Store, budgets: dict[str, int] | None = None, default_budget: int | None = None,
-                 timeout_s: float = 300, fresh_after: float | None = None, pace: dict[str, float] | None = None):
+                 timeout_s: float = 300, fresh_after: float | None = None, pace: dict[str, float] | None = None,
+                 token_budgets: dict[str, int] | None = None, share: float = 1.0):
         self.store = store
         self.budgets = budgets or {}
+        self.token_budgets = token_budgets or {}
+        self.share = share
         self.default_budget = default_budget
         self.timeout_s = timeout_s
         self.fresh_after = fresh_after  # None: any cached call; a time: only calls made since then
@@ -69,7 +75,12 @@ class Calls:
         return table.get(f"{provider}/{model}", table.get(provider, default))
 
     def budget_for(self, provider: str, model: str) -> int | None:
-        return self._limit(self.budgets, provider, model, self.default_budget)
+        b = self._limit(self.budgets, provider, model, self.default_budget)
+        return None if b is None else int(b * self.share)
+
+    def token_budget_for(self, provider: str, model: str) -> int | None:
+        b = self._limit(self.token_budgets, provider, model)
+        return None if b is None else int(b * self.share)
 
     def _wait(self, seconds: float) -> None:
         seconds = max(0.0, min(MAX_WAIT_S, seconds))
@@ -102,12 +113,14 @@ class Calls:
                     "attempts": 0, "duration_s": hit["duration"], "cached": True}
         for waits in range(MAX_WAITS + 1):
             day = utc_day()
-            used, exhausted = self.store.used(day, provider, model)
-            budget = self.budget_for(provider, model)
-            if exhausted or (budget is not None and used >= budget):
-                raise BudgetExhausted(f"{provider}/{model}: {used} calls today"
+            used, tokens, exhausted = self.store.used(day, provider, model)
+            budget, token_budget = self.budget_for(provider, model), self.token_budget_for(provider, model)
+            if exhausted or (budget is not None and used >= budget) \
+                    or (token_budget is not None and tokens >= token_budget):
+                raise BudgetExhausted(f"{provider}/{model}: {used} calls and {tokens:,} tokens today"
                                       + (" and the provider says its daily quota is gone" if exhausted
-                                         else f", our budget is {budget}"))
+                                         else f"; our budget is {budget if budget is not None else 'unset'} calls, "
+                                              f"{token_budget if token_budget is not None else 'unset'} tokens"))
             self._paced(provider, model)
             try:
                 r = providers.ask(provider, model, effort, prompt, files,
@@ -121,7 +134,7 @@ class Calls:
                 if e.kind not in WAIT_KINDS or waits == MAX_WAITS or (deadline and deadline.remaining() < 60):
                     raise
                 self._wait(e.retry_after or 30.0)  # an open breaker in its probe says 0: wait anyway
-        self.store.count_call(day, provider, model)
+        self.store.count_call(day, provider, model, tokens=(r.get("usage") or {}).get("total") or 0)
         self.store.remember(key, provider, model, effort, purpose, r["text"], r.get("duration_s", 0.0))
         self.real += 1
         return {**r, "cached": False}

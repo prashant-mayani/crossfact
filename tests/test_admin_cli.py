@@ -105,3 +105,22 @@ def test_check_keys_reports_each_provider(cli, llm, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "ok    Alpha a1" in out and "FAIL  Beta b1: auth" in out
     assert "Judge: no key set" in out and "the default judge (judge) has no key" in out
+
+
+def test_no_bootstrap_password_means_no_account_not_a_default_one(env, monkeypatch, capsys):
+    """There used to be a fallback password. Now: no account until one is set, and
+    the recovery CLI can create it."""
+    import io
+
+    from app import admin, auth, db, secretstore
+
+    monkeypatch.delenv("ADMIN_BOOTSTRAP_PASSWORD")
+    secretstore.clear_cache()
+    db.init_db()
+    assert auth.ensure_owner() is None and db.all_users() == []
+    with pytest.raises(SystemExit, match="no account exists yet"):
+        admin.main(["status"])
+    monkeypatch.setattr("sys.stdin", io.StringIO("chosen-by-me-123\n"))
+    assert admin.main(["set-password"]) == 0
+    assert auth.verify_pw(db.get_user(username="admin")["pw_hash"], "chosen-by-me-123")
+    assert "created the account admin" in capsys.readouterr().out

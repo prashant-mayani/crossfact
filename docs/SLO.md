@@ -159,7 +159,9 @@ burns too.
 ### CrossfactRunsAbandoned (warning)
 
 A pod died with runs in flight (OOM kill, crash, forced delete, node failure).
-Those runs were closed out, refunded, and offered for Retry. Find out why the
+Those runs were closed out, refunded, and offered for Retry. The pod that
+closes them out does so only once Prometheus has read its counters (or after 10
+minutes), so a crash that took the only pod down is counted too. Find out why the
 pod died: `kubectl -n crossfact get pods` (restarts, `OOMKilled` in
 `describe`), node events. Planned deploys and reboots never cause this; they
 drain.
@@ -169,8 +171,9 @@ drain.
 
 No successful nightly backup in 26 hours, or no successful weekly restore test
 in 8 days. `kubectl -n crossfact get jobs`, then the logs of the newest failed
-one. The verify job also fails when the bucket outgrows its 15 GB budget (the
-free allowance is 20 GB): shorten backup or upload retention. Run either by
+one. The verify job also fails when the bucket outgrows its 8 GB budget (the
+free allowance is 10 GB of Standard storage on a paid account or Free Trial,
+20 GB on an Always Free-only account): shorten backup or upload retention. Run either by
 hand: `kubectl -n crossfact create job --from=cronjob/crossfact-backup backup-now`.
 
 If the log says `backup REFUSED`, the backup in the bucket holds conversations
@@ -232,9 +235,14 @@ it by hand: `kubectl -n crossfact create job --from=cronjob/crossfact-eval-night
 - one failed probe in an hour doesn't
 - half of consensus runs degraded over 6 h warns
 - two bad runs out of two don't (the low-traffic guard)
-- half of successful runs slower than 240 s warns
+- half of successful runs slower than 240 s warns; one slow success among seven
+  failed runs doesn't (the latency guard counts successful runs, which is what
+  the latency SLI measures)
 - no scrapeable pod fires `CrossfactDown`; an abandoned run fires `CrossfactRunsAbandoned`
-- a restore step stuck in CrashLoopBackOff for 5 minutes fires `CrossfactRestoreBlocked`
+- a restore that keeps failing (an attempt every ten minutes, so the waiting state
+  comes and goes) fires `CrossfactRestoreBlocked`, and so does a restore step that
+  can't start because its key is missing; one that succeeds on its second try
+  stays quiet
 - a nightly check that last succeeded three days ago fires `CrossfactEvalStale`; two days doesn't
 - the availability SLI counts a gap in the data as downtime
 

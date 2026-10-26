@@ -6,6 +6,9 @@ just started) periodically closes out runs whose heartbeat went stale, which
 only happens when the owner died: OOM-kill, node reboot, crash. Those runs are
 marked "abandoned", their daily-quota slot is refunded, and the UI offers Retry.
 
+A new pod's first sweep waits until Prometheus has read its counters once, so
+the runs it closes out are counted (see _loop).
+
 A deploy is not a crash: on SIGTERM the server stops accepting new runs,
 finishes the ones in flight (bounded by the run deadline), keeps answering the
 UI's polls meanwhile, and only then exits. See server.py.
@@ -39,10 +42,16 @@ class Lifecycle:
         self._thread: threading.Thread | None = None
 
     # -- run registry ------------------------------------------------------
-    def begin(self, mid: str) -> None:
+    def begin(self, mid: str) -> bool:
+        """Count a run as in flight, unless a drain has started (then False: refuse it).
+        One lock with drain(): a run is either counted before the drain looks, or
+        refused, never started unseen and killed when the process exits."""
         with self._lock:
+            if self.draining.is_set():
+                return False
             self._inflight[mid] = time.time()
             tm.RUNS_IN_FLIGHT.set(len(self._inflight))
+            return True
 
     def end(self, mid: str) -> None:
         with self._lock:
@@ -55,7 +64,6 @@ class Lifecycle:
 
     # -- background loop ----------------------------------------------------
     def start(self) -> None:
-        self.sweep_orphans()
         if self._thread and self._thread.is_alive():
             if not self._stop.is_set():
                 return
@@ -76,14 +84,25 @@ class Lifecycle:
         tm.RUNS_IN_FLIGHT.set(0)
 
     def _loop(self) -> None:
+        """Heartbeats, faults, and orphan sweeps. The first sweep waits until Prometheus
+        has scraped this pod once (or first_sweep_max_s): runs a dead pod left behind
+        are closed out here, and counted before the first scrape they would be lost to
+        increase(), so CrossfactRunsAbandoned would never see a crash that took the pod
+        down with runs in flight."""
         lc = cfg()["lifecycle"]
         hb, sweep_every = float(lc["heartbeat_s"]), float(lc["sweep_every_s"])
-        last_sweep = time.monotonic()
+        first_max = float(lc.get("first_sweep_max_s", 600))
+        started, last_sweep = time.monotonic(), None
         while not self._stop.wait(hb):
             try:
                 db.heartbeat(self.inflight())
                 self.publish_faults()
-                if time.monotonic() - last_sweep >= sweep_every:
+                now = time.monotonic()
+                if last_sweep is None:
+                    due = tm.SCRAPED.seen.is_set() or now - started >= first_max
+                else:
+                    due = now - last_sweep >= sweep_every
+                if due:
                     self.sweep_orphans()
                     last_sweep = time.monotonic()
             except Exception:  # never let bookkeeping kill the pod
@@ -120,7 +139,8 @@ class Lifecycle:
     # -- drain -----------------------------------------------------------------
     def drain(self, timeout: float) -> bool:
         """Refuse new runs and wait for in-flight ones. True if all finished."""
-        self.draining.set()
+        with self._lock:
+            self.draining.set()
         tm.DRAINING.set(1)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:

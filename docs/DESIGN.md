@@ -244,7 +244,8 @@ app writes) plus uploads, as `crossfact-YYYYMMDD-HHMM.tar.gz` and
 The backup user can create and overwrite objects but not delete them, so a
 stolen key can't destroy the history; a lifecycle rule ages old copies out.
 Weekly, a separate Job downloads the latest backup, runs `PRAGMA
-integrity_check`, counts rows, and checks the bucket still fits the free 20 GB.
+integrity_check`, counts rows, and checks the bucket stays under 8 GB (the free
+allowance is 10 GB of Standard storage on a paid or trial account).
 
 Restore is the app pod's init container, so it runs before the app on every
 start, under Argo CD or plain Helm alike. With a database on the volume it does

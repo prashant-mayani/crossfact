@@ -23,13 +23,22 @@ def markdown(res: dict) -> str:
              f"{res['questions']} of {m['questions']} questions graded from `{m['dataset']}` "
              f"(sha256 `{m['dataset_sha256'][:12]}`), started {m['started']}, code/registry {code}"
              + (" **(mixed versions: allowed with --allow-version-change)**" if len(versions) > 1 else "")
-             + f". Grader `{m['grader']}`"
+             + f". Grader `{res.get('grader') or m['grader']}`"
              + ("" if m.get("grader_template_pinned", True) else " **(with a local grader template that is not the "
                 "pinned simple-evals file)**")
              + f". Closed-book; every system was told: *{m['instruction']}*", "",
-             "| system | graded | correct | wrong | not sure | accuracy when it answered | F1 | errors | "
-             "median latency | calls per question |",
-             "|---|---|---|---|---|---|---|---|---|---|"]
+             ]
+    h = res.get("primary")
+    if h:
+        lines += [f"**Headline, chosen before the run: {h['system']} against {h['reference']}** (the best single model "
+                  f"by F1, the rule fixed in advance), on the {h['n']} questions both answered: wrong answers "
+                  f"{100 * h['incorrect_delta']:+.1f} pp (exact McNemar p = {h['incorrect_p']:.3f}, Holm "
+                  f"{h['incorrect_p_holm']:.3f}); F1 {100 * h['f1_delta']:+.1f} points (95% interval "
+                  f"{100 * h['f1_ci'][0]:+.1f} to {100 * h['f1_ci'][1]:+.1f}; paired permutation p = {h['f1_p']:.3f}, "
+                  f"Holm {h['f1_p_holm']:.3f}). Holm-adjusted over these two tests; everything below is secondary.", ""]
+    lines += ["| system | graded | correct | wrong | not sure | accuracy when it answered | F1 | errors | "
+              "median latency | calls per question |",
+              "|---|---|---|---|---|---|---|---|---|---|"]
     ungraded = 0
     for name, s in res["systems"].items():
         ungraded += s.get("ungraded", 0)
@@ -47,15 +56,31 @@ def markdown(res: dict) -> str:
                   "them."]
     if res.get("paired"):
         lines += ["", f"Against **{res['reference']}** (the reference), on the questions both answered:", "",
-                  "| system | questions | change in correct | p | change in wrong | p | lost | found |",
+                  "| system | questions | change in correct | p (Holm) | change in wrong | p (Holm) | lost | found |",
                   "|---|---|---|---|---|---|---|---|"]
+
+        def _p(p: dict, k: str) -> str:
+            return f"{p[k]:.3f}" + (f" ({p[k + '_holm']:.3f})" if k + "_holm" in p else " (headline)")
+
         for name, p in res["paired"].items():
             s = res["systems"][name]
-            lines.append(f"| {name} | {p['n']} | {100 * p['correct_delta']:+.1f} pp | {p['correct_p']:.3f} | "
-                         f"{100 * p['incorrect_delta']:+.1f} pp | {p['incorrect_p']:.3f} | "
+            lines.append(f"| {name} | {p['n']} | {100 * p['correct_delta']:+.1f} pp | {_p(p, 'correct_p')} | "
+                         f"{100 * p['incorrect_delta']:+.1f} pp | {_p(p, 'incorrect_p')} | "
                          f"{_pct(s.get('oracle_gap'))} | {_pct(s.get('gain_rate'))} |")
-        lines += ["", "p: exact McNemar test on the paired outcomes. Fewer wrong answers bought only by abstaining "
-                  "shows up as a drop in correct answers too. Lost: a participant (a model the system asked, or "
-                  "self-check's first answer) was right and the final answer was not. Found: the final answer was "
-                  "right and no participant was."]
+        lines += ["", "p: exact McNemar test on the paired outcomes; in brackets, Holm-adjusted across this table's "
+                  "tests (the headline's own test is adjusted with the headline). Fewer wrong answers bought only by "
+                  "abstaining shows up as a drop in correct answers too. Lost: a participant (a model the system "
+                  "asked, or self-check's first answer) was right and the final answer was not. Found: the final "
+                  "answer was right and no participant was."]
+    split = {name: s["split"] for name, s in res["systems"].items() if s.get("split")}
+    if split:
+        lines += ["", "When some participants said \"I don't know\" and others answered:", "",
+                  "| system | questions | answered, right | answered, wrong | abstained | a participant was right |",
+                  "|---|---|---|---|---|---|"]
+        for name, sp in split.items():
+            lines.append(f"| {name} | {sp['n']} | {sp['correct']} | {sp['incorrect']} | {sp['abstained']} | "
+                         f"{sp['a_participant_correct']} |")
+        lines += ["", "Crossfact's merge keeps every point either side made, so when one side abstains it commits to "
+                  "the other side's answer; it holds back only when both answer, differently, and the judge can't "
+                  "decide between them."]
     return "\n".join(lines) + "\n"

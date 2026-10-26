@@ -169,6 +169,19 @@ def test_every_system_answers_and_is_graded(bench_env):
     assert "oracle_gap" not in s["single-alpha"]
 
 
+def test_the_report_says_what_happened_when_one_side_abstained(bench_env):
+    from bench import report
+
+    run_id, _ = go(bench_env, bench_env["write"]())
+    res = results(bench_env, run_id)
+    # 487 x 36: beta said "I don't know", alpha answered (rightly); Crossfact committed to alpha's answer
+    assert res["systems"]["crossfact"]["split"] == {"n": 1, "correct": 1, "incorrect": 0, "abstained": 0,
+                                                  "a_participant_correct": 1}
+    assert "split" not in res["systems"]["selfcheck-alpha"]  # alpha never abstained
+    md = report.markdown(res)
+    assert "| crossfact | 1 | 1 | 0 | 0 | 1 |" in md and "commits to the other side's answer" in md
+
+
 def test_crossfact_runs_the_real_pipeline(bench_env):
     run_id, _ = go(bench_env, bench_env["write"]())
     got = answers_of(bench_env, run_id, "crossfact")
@@ -318,6 +331,30 @@ def test_budgets_pause_the_run_and_later_days_finish_it(bench_env, monkeypatch):
         run_id2, info = go(bench_env, bench_env["write"](budgets={"beta/b1": 2 + day["n"] % 2}))  # budgets can change
         assert run_id2 == run_id
     assert counts(results(bench_env, run_id))["crossfact"] == (4, 0, 0)
+
+
+def test_token_budgets_use_the_counts_the_provider_reports(bench_env):
+    """Groq's free tier caps tokens per day (reasoning included), which a reasoning model
+    reaches before its request cap: the run stops on our own token budget first."""
+    from app.providers import _reply
+
+    alpha = model_reply("alpha")
+    bench_env["llm"].rules.insert(0, {"provider": "alpha", "model": None, "purpose": None, "error": None,
+                                      "times": None, "reply": lambda p: _reply(alpha(p), {"total": 100})})
+    run_id, info = go(bench_env, bench_env["write"](systems=[SYSTEMS[0]], token_budgets={"alpha/a1": 250}))
+    assert info["paused"] and "300 tokens today" in info["paused"]
+    assert len(answers_of(bench_env, run_id, "single-alpha")) == 3
+
+
+def test_leaving_quota_for_the_app_scales_every_budget(bench_env):
+    from bench import runner
+
+    path = bench_env["write"](systems=[SYSTEMS[1]], budgets={"beta/b1": 4})
+    run_id, info = go(bench_env, path, leave_for_app=0.5)
+    assert info["paused"] and "budget is 2 calls" in info["paused"]
+    assert len(answers_of(bench_env, run_id, "single-beta")) == 2
+    with pytest.raises(runner.RunError, match="fraction"):
+        go(bench_env, path, leave_for_app=1.0)
 
 
 def test_quota_exhaustion_inside_crossfact_is_a_pause_not_an_answer(bench_env):
@@ -476,6 +513,43 @@ def test_mcnemar_and_f1():
     assert r["f1"] == pytest.approx(2 * 0.6 * 0.75 / 1.35)
 
 
+def test_holm_adjustment():
+    from bench.metrics import holm
+
+    assert holm([0.01, 0.04, 0.03, 0.2]) == pytest.approx([0.04, 0.09, 0.09, 0.2])
+    assert holm([0.5]) == [0.5] and holm([]) == []
+    assert holm([0.6, 0.7]) == pytest.approx([1.0, 1.0])
+
+
+def test_the_f1_difference_test():
+    from bench.metrics import f1_difference
+
+    same = ["CORRECT", "INCORRECT", "NOT_ATTEMPTED"] * 10
+    r = f1_difference(same, same, boot=300)
+    assert r["delta"] == 0 and r["p"] == 1.0
+    better = ["CORRECT"] * 25 + ["INCORRECT"] * 5
+    worse = ["INCORRECT"] * 25 + ["CORRECT"] * 5
+    r = f1_difference(better, worse, boot=300)
+    assert r["delta"] > 0.5 and r["p"] < 0.01 and r["ci"][0] > 0
+
+
+def test_the_headline_is_fixed_in_advance_and_the_rest_is_adjusted(bench_env):
+    from bench import report
+
+    run_id, _ = go(bench_env, bench_env["write"]())
+    res = results(bench_env, run_id)
+    h = res["primary"]
+    assert (h["system"], h["reference"], h["n"]) == ("crossfact", "single-alpha", 4)
+    assert h["incorrect_delta"] == pytest.approx(-0.25) and h["f1_delta"] == pytest.approx(0.25)
+    assert h["incorrect_p_holm"] >= h["incorrect_p"] and h["f1_p_holm"] >= h["f1_p"]
+    p = res["paired"]
+    assert "incorrect_p_holm" not in p["crossfact"] and "correct_p_holm" in p["crossfact"]
+    assert all("incorrect_p_holm" in v and "correct_p_holm" in v for k, v in p.items() if k != "crossfact")
+    md = report.markdown(res)
+    assert md.index("Headline, chosen before the run: crossfact against single-alpha") < md.index("| system | graded")
+    assert "(headline)" in md
+
+
 def test_abstaining_more_lowers_wrong_and_correct_together():
     """The trap: a system that says "I don't know" more looks more accurate when it
     answers. The paired numbers show what it gave up for that."""
@@ -575,13 +649,35 @@ def test_only_unambiguous_cases_skip_the_grader(answer, gold, grade):
 
 
 @pytest.mark.parametrize("reply,grade", [
-    ("A", "CORRECT"), ("B.", "INCORRECT"), ("C", "NOT_ATTEMPTED"), ("The grade is A", "CORRECT"),
-    ("Answer: B.", "INCORRECT"), ("NOT_ATTEMPTED", "NOT_ATTEMPTED"), ("maybe", None),
+    ("A", "CORRECT"), ("B.", "INCORRECT"), ("(C)", "NOT_ATTEMPTED"), ("**A**", "CORRECT"), ("b\n", "INCORRECT"),
+    # an explanation is read by its grade words, never by a leading word "A"
+    ("A predicted answer of 1923 contradicts the gold target, so it is INCORRECT", "INCORRECT"),
+    ("The predicted answer is not correct.", "INCORRECT"), ("C) NOT ATTEMPTED", "NOT_ATTEMPTED"),
+    ("A: CORRECT", "CORRECT"), ("A\nThe predicted answer matches the gold target.", "CORRECT"),
+    ("Grade: C (NOT_ATTEMPTED)", "NOT_ATTEMPTED"), ("NOT_ATTEMPTED", "NOT_ATTEMPTED"),
+    ("The grade is A", "CORRECT"), ("Answer: B.", "INCORRECT"),
+    # ambiguous or no grade at all: ask again
+    ("A: INCORRECT", None), ("A\nThis is INCORRECT because", None), ("CORRECT, not INCORRECT", None),
+    ("I would say A", None), ("A cat sat on the mat", None), ("maybe", None), ("", None),
 ])
 def test_grader_replies_are_parsed(reply, grade):
     from bench.grader import parse
 
     assert parse(reply) == grade
+
+
+def test_a_parser_change_regrades_from_cached_replies(bench_env, monkeypatch):
+    """Grades are cached per parser version: a fixed parser re-reads the stored replies
+    (no new grader calls) instead of keeping grades the old parser got wrong."""
+    from bench import grader
+
+    path = bench_env["write"](systems=[SYSTEMS[0], SYSTEMS[1]])
+    run_id, _ = go(bench_env, path)
+    before = counts(results(bench_env, run_id))
+    monkeypatch.setattr(grader, "PARSER_VERSION", grader.PARSER_VERSION + 1)
+    assert results(bench_env, run_id)["systems"]["single-alpha"]["ungraded"] == 4  # every grade is per parser
+    _, info = go(bench_env, path)
+    assert info["new_calls"] == 0 and counts(results(bench_env, run_id)) == before
 
 
 def test_vote_keys():

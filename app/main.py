@@ -48,6 +48,7 @@ async def lifespan(_app: FastAPI):
     LIFECYCLE.start()
     yield
     LIFECYCLE.stop()
+    tm.shutdown_tracing()  # send the spans still buffered (the runs that finished while draining)
 
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
@@ -157,7 +158,7 @@ def readyz():
 
 @app.get("/login", response_class=HTMLResponse)
 def login_form(request: Request):
-    return page(request, "login.html", error=None)
+    return page(request, "login.html", error=None if auth.ensure_owner(quiet=True) else auth.NO_ACCOUNT)
 
 
 @app.post("/login")
@@ -166,6 +167,8 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
     for key in (f"u:{uname}", f"ip:{ip}"):
         if db.lockout_check(key):
             return page(request, "login.html", error="Too many attempts. Try again in 15 minutes.", status_code=429)
+    if not auth.ensure_owner(quiet=True):  # the bootstrap password may have been set since startup
+        return page(request, "login.html", error=auth.NO_ACCOUNT, status_code=503)
     u = db.get_user(username=uname)
     if not u or u["disabled"] or not auth.verify_pw(u["pw_hash"], password):
         db.lockout_fail(f"u:{uname}")
@@ -265,8 +268,7 @@ def _start_job(mid: str, uid: str, question: str, history: str, side_a: dict, si
             pl.setdefault("stages", []).append(stage)
             db.update_message(mid, pipeline=pl)
 
-    def work() -> None:
-        LIFECYCLE.begin(mid)
+    def work() -> None:  # already counted in flight by the caller (LIFECYCLE.begin)
         try:
             out = run_pipeline(question, history, side_a, side_b, mode, file_paths, progress)
             record = {"stages": out["stages"], "outcome": out["outcome"], "degraded": out["degraded"],
@@ -320,8 +322,17 @@ def ask_route(request: Request,
     mid = db.add_message(tid, "assistant", status="running", owner=INSTANCE_ID,
                          pipeline={"stages": [], "mode": mode, "sides": {"A": side_a, "B": side_b},
                                    "file_ids": file_ids})
+    if not LIFECYCLE.begin(mid):  # a drain started since the check above: refuse, uncounted
+        db.update_message(mid, content=DRAINING_MSG, status="error")
+        raise HTTPException(503, DRAINING_MSG)
     db.bump_usage(s["user_id"])
-    _start_job(mid, s["user_id"], question, history, side_a, side_b, mode, paths)
+    try:
+        _start_job(mid, s["user_id"], question, history, side_a, side_b, mode, paths)
+    except BaseException:  # the run never started: don't leave a drain waiting on it
+        LIFECYCLE.end(mid)
+        db.update_message(mid, content="The run could not start. Try again.", status="error")
+        db.refund_usage(s["user_id"])
+        raise
     return JSONResponse({"thread_id": tid, "message_id": mid})
 
 

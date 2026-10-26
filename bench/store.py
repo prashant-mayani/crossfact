@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS calls(
   response TEXT NOT NULL, duration REAL NOT NULL, created REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS usage(
   day TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, calls INTEGER NOT NULL DEFAULT 0,
-  exhausted INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, provider, model));
+  exhausted INTEGER NOT NULL DEFAULT 0, tokens INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, provider, model));
 CREATE TABLE IF NOT EXISTS runs(
   run_id TEXT PRIMARY KEY, created REAL NOT NULL, meta TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS answers(
@@ -32,6 +32,8 @@ class Store:
         self.path = path
         with self.conn() as c:
             c.executescript(SCHEMA)
+            if "tokens" not in {r["name"] for r in c.execute("PRAGMA table_info(usage)")}:  # a database from before
+                c.execute("ALTER TABLE usage ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0")
 
     @contextmanager
     def conn(self):
@@ -61,18 +63,19 @@ class Store:
             c.execute("DELETE FROM calls WHERE key=?", (key,))
 
     # -- usage against free tiers ---------------------------------------------------------
-    def used(self, day: str, provider: str, model: str) -> tuple[int, bool]:
+    def used(self, day: str, provider: str, model: str) -> tuple[int, int, bool]:
+        """(calls, tokens, the provider said its daily quota is gone) so far today."""
         with self.conn() as c:
-            r = c.execute("SELECT calls, exhausted FROM usage WHERE day=? AND provider=? AND model=?",
+            r = c.execute("SELECT calls, tokens, exhausted FROM usage WHERE day=? AND provider=? AND model=?",
                           (day, provider, model)).fetchone()
-        return (r["calls"], bool(r["exhausted"])) if r else (0, False)
+        return (r["calls"], r["tokens"], bool(r["exhausted"])) if r else (0, 0, False)
 
-    def count_call(self, day: str, provider: str, model: str, exhausted: bool = False) -> None:
+    def count_call(self, day: str, provider: str, model: str, exhausted: bool = False, tokens: int = 0) -> None:
         with self.conn() as c:
-            c.execute("INSERT INTO usage(day, provider, model, calls, exhausted) VALUES(?,?,?,?,?) "
+            c.execute("INSERT INTO usage(day, provider, model, calls, exhausted, tokens) VALUES(?,?,?,?,?,?) "
                       "ON CONFLICT(day, provider, model) DO UPDATE SET calls=calls+excluded.calls, "
-                      "exhausted=MAX(exhausted, excluded.exhausted)",
-                      (day, provider, model, 0 if exhausted else 1, int(exhausted)))
+                      "exhausted=MAX(exhausted, excluded.exhausted), tokens=tokens+excluded.tokens",
+                      (day, provider, model, 0 if exhausted else 1, int(exhausted), int(tokens or 0)))
 
     # -- runs, answers, grades ------------------------------------------------------------
     def run_meta(self, run_id: str) -> dict | None:

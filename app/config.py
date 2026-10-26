@@ -44,7 +44,9 @@ _DEFAULTS: dict = {
         "drain_timeout_s": 660,      # must exceed pipeline.run_deadline_s
     },
     "tracing": {"enabled": False, "endpoint": "", "sample_ratio": 1.0},
-    "lifecycle": {"heartbeat_s": 15, "orphan_after_s": 90, "sweep_every_s": 60},
+    # first_sweep_max_s: a new pod closes out orphans once Prometheus has read its
+    # counters at zero, or after this long without a scrape (app/lifecycle.py).
+    "lifecycle": {"heartbeat_s": 15, "orphan_after_s": 90, "sweep_every_s": 60, "first_sweep_max_s": 600},
 }
 
 

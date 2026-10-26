@@ -26,6 +26,8 @@ budgets:
   groq/openai/gpt-oss-120b: 40        # the judge
   workers_ai/@cf/openai/gpt-oss-120b: 20
   workers_ai_chat/@cf/meta/llama-3.3-70b-instruct-fp8-fast: 40   # the grader: about 47 neurons a grade
+token_budgets:
+  groq/openai/gpt-oss-120b: 40000     # the judge, sharing Groq's 200K a day with your app's
 grader:
   model: workers_ai_chat/@cf/meta/llama-3.3-70b-instruct-fp8-fast
   effort: "off"
@@ -43,4 +45,5 @@ systems:
   - {name: single-claude, kind: single, model: claude/sonnet}
   - {name: selfcheck-claude, kind: selfcheck, model: claude/sonnet}
   - {name: crossfact, kind: crossfact, side_a: claude/sonnet, side_b: gemini/gemini-3.5-flash-lite}
+primary: {system: crossfact}
 reference: single-claude

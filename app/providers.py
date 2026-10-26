@@ -418,6 +418,38 @@ def openai_effort(p: dict, effort: str, model: str = "") -> str | None:
     return min(levels, key=lambda lvl: (abs(OPENAI_LEVELS.index(lvl) - want), -OPENAI_LEVELS.index(lvl)))
 
 
+class Reply(str):
+    """An answer's text, carrying the token counts the provider reported, if it did
+    (the measurement harness budgets Groq's tokens per day with them)."""
+
+    usage: dict | None = None
+
+
+def _reply(text: str, usage: dict | None) -> str:
+    r = Reply(text)
+    r.usage = usage
+    return r
+
+
+def _openai_usage(data: dict) -> dict | None:
+    body = data["result"] if isinstance(data.get("result"), dict) else data
+    u = body.get("usage") if isinstance(body.get("usage"), dict) else None
+    if not u:
+        return None
+    inp, out = u.get("prompt_tokens", u.get("input_tokens")), u.get("completion_tokens", u.get("output_tokens"))
+    total = u.get("total_tokens")
+    if total is None and isinstance(inp, int) and isinstance(out, int):
+        total = inp + out
+    return {"input": inp, "output": out, "total": total}
+
+
+# A single request larger than a per-minute token limit can never succeed on that
+# tier (Groq free: 8K tokens a minute), whatever its status says: no retries, so
+# the next model in the chain takes it at once.
+TOO_LARGE = re.compile(r"request too large|reduce your message size|context.?length|maximum context|"
+                       r"too many (input )?tokens", re.I)
+
+
 def _responses_text(data: dict) -> str:
     """Text of an OpenAI Responses API result: the message parts, not the reasoning."""
     if isinstance(data.get("result"), dict):  # Cloudflare's envelope, if present
@@ -466,6 +498,8 @@ def _ask_openai(p, model, effort, prompt, files, timeout):
         if kind in (ErrorKind.RATE_LIMITED, ErrorKind.BAD_REQUEST, ErrorKind.UNKNOWN) \
                 and classify_text(resp.text) is ErrorKind.QUOTA_EXHAUSTED:
             kind = ErrorKind.QUOTA_EXHAUSTED
+        if kind is not ErrorKind.QUOTA_EXHAUSTED and TOO_LARGE.search(resp.text or ""):
+            kind = ErrorKind.BAD_REQUEST
         raise ProviderError(f"{p.get('label')} {resp.status_code}: {resp.text[:300]}", kind,
                             retry_after=_retry_after_header(resp), status=resp.status_code)
     try:
@@ -476,7 +510,7 @@ def _ask_openai(p, model, effort, prompt, files, timeout):
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()  # reasoning some models put in the answer
     if not text:
         raise ProviderError(f"{p.get('label')} returned an empty answer", ErrorKind.SERVER)
-    return text
+    return _reply(text, _openai_usage(data))
 
 
 ADAPTERS = {"claude_cli": _ask_claude_cli, "gemini_api": _ask_gemini_api, "openai": _ask_openai}
@@ -541,7 +575,7 @@ def ask(pid: str, model: str, effort: str, prompt: str, files: list[str] | None 
         sp.set_attribute("crossfact.result", "ok")
         sp.set_attribute("crossfact.attempts", attempts)
     return {"text": (text or "").strip(), "provider": pid, "model": model, "effort": effort,
-            "attempts": attempts, "duration_s": round(duration, 2)}
+            "attempts": attempts, "duration_s": round(duration, 2), "usage": getattr(text, "usage", None)}
 
 
 def prime_metrics() -> None:

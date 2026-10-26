@@ -157,3 +157,66 @@ def test_metrics_describe_runs_and_calls(client, admin, llm):
                      text)
     assert 'crossfact_run_duration_seconds_bucket{le="240.0",mode="consensus",result="success"}' in text
     assert re.search(r'crossfact_http_requests_total\{method="POST",route="/ask",status="200"\}', text)
+
+
+def test_a_run_is_in_flight_before_its_thread_starts(client, admin, llm, monkeypatch):
+    """The drain race: SIGTERM between /ask returning and the run's thread starting used
+    to find nothing in flight, exit, and leave the run for the next pod to call abandoned."""
+    import app.main as main
+    from app.lifecycle import LIFECYCLE
+
+    real, pending = main._start_job, []
+    monkeypatch.setattr(main, "_start_job", lambda *a: pending.append(a))  # the run's thread hasn't started yet
+    r = ask(client, admin)
+    assert r.status_code == 200
+    mid = r.json()["message_id"]
+    assert mid in LIFECYCLE.inflight()  # so a drain that starts now waits for it
+    real(*pending[0])  # the thread gets its turn
+    assert wait_done(client, mid)["status"] == "done" and mid not in LIFECYCLE.inflight()
+
+
+def test_a_drain_that_starts_mid_request_refuses_the_run_uncharged(client, admin, llm, monkeypatch):
+    from app import db
+    from app.lifecycle import LIFECYCLE
+
+    monkeypatch.setattr(LIFECYCLE, "begin", lambda mid: False)  # draining began after the first check
+    r = ask(client, admin)
+    assert r.status_code == 503 and "restarting" in r.text
+    assert db.usage_today(db.get_user(username="admin")["id"]) == 0
+
+
+def test_begin_and_drain_share_one_lock(env):
+    import threading
+
+    from app import db
+    from app.lifecycle import LIFECYCLE
+
+    db.init_db()  # drain() keeps the runs it waits for heartbeating
+    assert LIFECYCLE.begin("m1")
+    t = threading.Thread(target=LIFECYCLE.drain, args=(0.3,))
+    t.start()
+    for _ in range(100):
+        if LIFECYCLE.draining.is_set():
+            break
+        time.sleep(0.01)
+    assert LIFECYCLE.begin("m2") is False and LIFECYCLE.inflight() == ["m1"]
+    LIFECYCLE.end("m1")
+    t.join()
+
+
+def test_without_a_bootstrap_password_sign_in_says_what_to_set(env, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app import secretstore
+    from app.main import app
+
+    monkeypatch.delenv("ADMIN_BOOTSTRAP_PASSWORD")
+    secretstore.clear_cache()
+    with TestClient(app, base_url="https://testserver") as c:
+        assert "admin_bootstrap_password" in c.get("/login").text
+        r = c.post("/login", data={"username": "admin", "password": "change-me-now"}, follow_redirects=False)
+        assert r.status_code == 503 and "admin_bootstrap_password" in r.text  # no default password exists
+        monkeypatch.setenv("ADMIN_BOOTSTRAP_PASSWORD", "set-in-vault-later-1")
+        secretstore.clear_cache()  # the secret store re-reads Vault's copy within a minute
+        r = c.post("/login", data={"username": "admin", "password": "set-in-vault-later-1"}, follow_redirects=False)
+        assert r.status_code == 303  # the account is created at this first sign-in

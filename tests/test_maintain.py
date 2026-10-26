@@ -287,8 +287,8 @@ def test_cleanup_enforces_upload_retention(maintain, env):
 def test_verify_fails_when_the_bucket_outgrows_the_free_allowance(maintain, env):
     seed()
     maintain.backup()
-    maintain.store.approximate_size = 16 * 1024**3
-    with pytest.raises(SystemExit, match="over the 15 GB budget"):
+    maintain.store.approximate_size = 9 * 1024**3  # under 10 GB, but too close to a paid account's allowance
+    with pytest.raises(SystemExit, match="over the 8 GB budget"):
         maintain.verify()
 
 
@@ -397,6 +397,38 @@ def test_forced_restore_replaces_a_live_database_and_drops_its_journal(maintain,
     maintain.restore(force=True)
     assert not os.path.exists(wal)
     assert len(db.user_threads(uid)) == 2
+
+
+@pytest.mark.parametrize("killed_at", ["uploads", "database"])
+def test_a_restore_killed_part_way_runs_again_on_the_next_start(maintain, env, monkeypatch, killed_at):
+    """The database's presence marks a finished restore, so it goes in last: a restore
+    killed at any step before that leaves no database, and the next start restores again."""
+    from app import db
+
+    uid = seed()
+    up = env / "data" / "uploads" / uid
+    up.mkdir(parents=True)
+    (up / "notes.md").write_text("hello")
+    maintain.backup()
+    wipe_volume(env)
+    (up / "notes.md").unlink()
+
+    real = os.replace
+
+    step = "uploads" if killed_at == "uploads" else os.path.basename(db.db_file())
+
+    def killed(src, dst):
+        if os.path.basename(dst) == step:
+            raise KeyboardInterrupt("the pod was killed")
+        return real(src, dst)
+
+    monkeypatch.setattr(maintain.os, "replace", killed)
+    with pytest.raises(KeyboardInterrupt):
+        maintain.restore()
+    assert not os.path.exists(db.db_file())  # so the next start doesn't skip the restore
+    monkeypatch.setattr(maintain.os, "replace", real)
+    maintain.restore()
+    assert db.user_threads(uid) and (up / "notes.md").read_text() == "hello"
 
 
 def test_cleanup_removes_staging_left_by_a_killed_job(maintain, env):

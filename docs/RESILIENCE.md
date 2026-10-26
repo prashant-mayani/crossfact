@@ -167,6 +167,13 @@ degraded runs. If that becomes common, the levers are a judge effort of
 retries on a host that is down hard are the expensive part until its breaker
 opens; three failures is the threshold.
 
+One case the simulator doesn't model: a judge prompt bigger than Groq's free
+per-minute token allowance (8,000 tokens; the prompt carries both full answers)
+can never fit, so the answer "request too large" is a bad request, not a rate
+limit: no retries, no breaker, the next judge at once
+(`tests/test_providers.py::test_a_request_over_the_per_minute_token_limit_fails_fast`).
+On long contested questions, expect Workers AI to rule.
+
 ### What the simulator can't tell you
 
 Real latency distributions and their tails; failures that are correlated

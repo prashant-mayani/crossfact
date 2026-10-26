@@ -1,6 +1,7 @@
 """python -m bench <command>
 
   run --config bench/configs/free.yaml [--limit N]   answer, grade, resume
+      [--leave-for-app 0.5]                          share the free tiers with a deployed app
   report --run RUN_ID [--md FILE] [--json FILE]      the tables for docs/EVAL.md
   runs                                               runs in the database
   grade-check --run RUN_ID --grader provider/model   how often a second grader agrees
@@ -48,7 +49,7 @@ def cmd_run(args) -> int:
     db, cache = _paths(args)
     run_id, info = runner.run(args.config, db=db, cache_dir=cache, limit=args.limit,
                               template_file=args.template_file, allow_version_change=args.allow_version_change,
-                              repin=args.repin)
+                              repin=args.repin, leave_for_app=args.leave_for_app)
     res = runner.results(Store(db), run_id, cache, args.template_file)
     print(report.markdown(res))
     if args.json:
@@ -142,6 +143,8 @@ def main(argv=None) -> int:
     r.add_argument("--allow-version-change", action="store_true")
     r.add_argument("--repin", action="store_true", help="accept a changed dataset and re-pin its hash")
     r.add_argument("--pause-ok", action="store_true", help="exit 0 when paused on a budget (scheduled runs)")
+    r.add_argument("--leave-for-app", type=float, default=0.0, metavar="FRACTION",
+                   help="leave this share of every daily budget unused, for a deployed app on the same accounts")
     r.set_defaults(fn=cmd_run)
     p = sub.add_parser("report")
     p.add_argument("--run", required=True)

@@ -28,7 +28,7 @@ from .store import Store
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAX_ATTEMPTS = 3  # a question a system keeps failing on is recorded as an error after this many runs
-PACING_KEYS = ("budgets", "default_budget", "pace")
+PACING_KEYS = ("budgets", "default_budget", "pace", "token_budgets")
 # What decides an answer or a grade. Not here: the report, the statistics (computed at report
 # time from stored grades, so fixing them never needs a re-run), the store and the CLI.
 VERSIONED = ("app/*.py", "bench/calls.py", "bench/datasets.py", "bench/grader.py", "bench/systems.py")
@@ -126,7 +126,12 @@ def preflight(cfg: dict) -> None:
 
 
 def run(config_path: str, *, db: str, cache_dir: str, limit: int | None = None, template_file: str | None = None,
-        allow_version_change: bool = False, repin: bool = False, log=print) -> tuple[str, dict]:
+        allow_version_change: bool = False, repin: bool = False, leave_for_app: float = 0.0,
+        log=print) -> tuple[str, dict]:
+    """leave_for_app: the fraction of every daily budget to leave unused, for a deployed
+    app on the same accounts (Groq's limits are per organization: a second key shares them)."""
+    if not 0 <= leave_for_app < 1:
+        raise RunError("--leave-for-app is a fraction between 0 and 1 (0.5 leaves half of each budget)")
     cfg = load_config(config_path)
     store = Store(db)
     registry_sha = setup_app(cfg, tempfile.mkdtemp(prefix="bench-"))
@@ -168,7 +173,10 @@ def run(config_path: str, *, db: str, cache_dir: str, limit: int | None = None, 
                 "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "started_ts": time.time()}
 
     calls = Calls(store, cfg.get("budgets"), cfg.get("default_budget"), float(cfg.get("timeout_s", 300)),
-                  fresh_after=None if cached else meta["started_ts"], pace=cfg.get("pace"))
+                  fresh_after=None if cached else meta["started_ts"], pace=cfg.get("pace"),
+                  token_budgets=cfg.get("token_budgets"), share=1.0 - leave_for_app)
+    if leave_for_app:
+        log(f"leaving {leave_for_app:.0%} of each daily budget for your app")
     grade = grader.Grader(calls, cfg["grader"], template, template_sha)
     built = [systems.build(s, calls, meta["instruction"], cfg.get("effort", "medium")) for s in cfg["systems"]]
     if not old:
@@ -240,6 +248,7 @@ def results(store: Store, run_id: str, cache_dir: str, template_file: str | None
                      "calls": a["calls"], "cached": a["cached"],
                      "participant_grades": parts if kinds.get(a["system"]) != "single" and all(parts) else []})
     order = [s["name"] for s in cfg["systems"]]
-    summary = metrics.summarize(rows, reference=cfg.get("reference"), seed=int(cfg.get("seed", 1)))
+    primary = (cfg.get("primary") or {}).get("system") or next((n for n, k in kinds.items() if k == "crossfact"), None)
+    summary = metrics.summarize(rows, reference=cfg.get("reference"), seed=int(cfg.get("seed", 1)), primary=primary)
     summary["systems"] = {k: summary["systems"][k] for k in order if k in summary["systems"]}
-    return {"run_id": run_id, "meta": meta, **summary}
+    return {"run_id": run_id, "meta": meta, "grader": grade.id, **summary}

@@ -101,3 +101,25 @@ def test_bounded_series_exist_at_zero_before_the_first_event(llm, monkeypatch):
     # disabled providers stay out: no series for what can't be called
     assert value("crossfact_provider_calls_total",
                  {"provider": "off", "model": "o1", "purpose": "answer", "result": "ok"}) is None
+
+
+def test_buffered_spans_are_sent_at_shutdown(monkeypatch):
+    """Spans go out in batches; the app flushes them on its way out, so the runs a
+    drain waited for still reach Tempo."""
+    from app import telemetry as tm
+
+    calls = []
+
+    class Provider:
+        def force_flush(self, ms):
+            calls.append(("flush", ms))
+
+        def shutdown(self):
+            calls.append(("shutdown",))
+
+    monkeypatch.setattr(tm, "_tracing_ready", True)
+    monkeypatch.setattr(tm.trace, "get_tracer_provider", lambda: Provider())
+    tm.shutdown_tracing()
+    assert calls == [("flush", 10000), ("shutdown",)] and tm._tracing_ready is False
+    tm.shutdown_tracing()  # a second call is harmless
+    assert len(calls) == 2

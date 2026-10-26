@@ -11,11 +11,19 @@ Per system, over the questions it answered (errors are counted, not scored):
                                       asked; self-check's first answer): questions where a participant
                                       was correct and the final answer was not
   gain_rate ("found")                 the reverse: the final answer was correct and no participant was
+  split                               questions where some participants said "I don't know" and others
+                                      answered: how often the final answer was right, wrong, or an abstention
 
 Against a reference (the best single model by F1, unless the config names one):
   the change in correct and incorrect rates on the questions both answered, each with
   an exact McNemar test on the paired outcomes. A system that only abstains more
   lowers its incorrect rate and its correct rate together; both are shown.
+
+The headline, chosen before the run (the config's primary, by default Crossfact
+against the reference): the change in wrong answers (exact McNemar) and in F1
+(paired permutation test, with a paired bootstrap interval), Holm-adjusted over
+those two. Every other comparison is secondary, Holm-adjusted across the table:
+with sixteen p-values, one under 0.05 is expected by chance alone.
 """
 from __future__ import annotations
 
@@ -52,7 +60,45 @@ def mcnemar_exact(b: int, c: int) -> float:
     return min(1.0, 2 * tail)
 
 
-def summarize(rows: list[dict], reference: str | None = None, boot: int = 2000, seed: int = 0) -> dict:
+def holm(pvalues: list[float]) -> list[float]:
+    """Holm-Bonferroni adjusted p-values, in the input order."""
+    order = sorted(range(len(pvalues)), key=lambda i: pvalues[i])
+    out, running = [0.0] * len(pvalues), 0.0
+    for rank, i in enumerate(order):
+        running = max(running, min(1.0, (len(pvalues) - rank) * pvalues[i]))
+        out[i] = running
+    return out
+
+
+def _f1(grades: list[str]) -> float:
+    return _rates(grades)["f1"] if grades else 0.0
+
+
+def f1_difference(mine: list[str], ref: list[str], boot: int = 2000, seed: int = 0) -> dict:
+    """F1 of one system minus another's, on the same questions in the same order:
+    a paired bootstrap interval, and a paired permutation p-value (swap the two
+    systems' outcomes on each question at random, as if they were interchangeable)."""
+    n = len(mine)
+    delta = _f1(mine) - _f1(ref)
+    rng = random.Random(seed)
+    diffs = []
+    for _ in range(boot):
+        idx = [rng.randrange(n) for _ in range(n)]
+        diffs.append(_f1([mine[i] for i in idx]) - _f1([ref[i] for i in idx]))
+    extreme = 0
+    for _ in range(boot):
+        a, b = [], []
+        for x, y in zip(mine, ref, strict=True):
+            if rng.random() < 0.5:
+                x, y = y, x
+            a.append(x)
+            b.append(y)
+        extreme += abs(_f1(a) - _f1(b)) >= abs(delta) - 1e-12
+    return {"delta": delta, "ci": [pct(diffs, 0.025), pct(diffs, 0.975)], "p": (extreme + 1) / (boot + 1)}
+
+
+def summarize(rows: list[dict], reference: str | None = None, boot: int = 2000, seed: int = 0,
+              primary: str | None = None) -> dict:
     """rows: {system, kind, qid, grade (or None), error, latency, cached, participant_grades: list}."""
     systems: dict[str, list[dict]] = {}
     for r in rows:
@@ -73,6 +119,13 @@ def summarize(rows: list[dict], reference: str | None = None, boot: int = 2000, 
             s["oracle_gap"] = missed / len(with_parts)
             s["gain_rate"] = sum(1 for r in with_parts if r["grade"] == "CORRECT"
                                  and "CORRECT" not in r["participant_grades"]) / len(with_parts)
+            split = [r for r in with_parts if "NOT_ATTEMPTED" in r["participant_grades"]
+                     and {"CORRECT", "INCORRECT"} & set(r["participant_grades"])]
+            if split:  # some participants said "I don't know", others answered: what did the system do?
+                s["split"] = {"n": len(split),
+                              **{k: sum(1 for r in split if r["grade"] == g) for k, g in
+                                 (("correct", "CORRECT"), ("incorrect", "INCORRECT"), ("abstained", "NOT_ATTEMPTED"))},
+                              "a_participant_correct": sum(1 for r in split if "CORRECT" in r["participant_grades"])}
             s["oracle_correct_rate"] = sum("CORRECT" in r["participant_grades"] for r in with_parts) / len(with_parts)
         out[name] = s
 
@@ -111,4 +164,18 @@ def summarize(rows: list[dict], reference: str | None = None, boot: int = 2000, 
                 res[f"{label}_p"] = mcnemar_exact(b, c)
                 res[f"{label}_discordant"] = [b, c]
             paired[name] = res
-    return {"systems": out, "reference": ref, "paired": paired, "questions": len(qids)}
+
+    head = None
+    if ref and primary in paired:
+        common = sorted(set(by[primary]) & set(by[ref]))
+        f1 = f1_difference([by[primary][q] for q in common], [by[ref][q] for q in common], boot, seed)
+        p_wrong, p_f1 = holm([paired[primary]["incorrect_p"], f1["p"]])
+        head = {"system": primary, "reference": ref, "n": len(common),
+                "incorrect_delta": paired[primary]["incorrect_delta"], "incorrect_p": paired[primary]["incorrect_p"],
+                "incorrect_p_holm": p_wrong, "f1_delta": f1["delta"], "f1_ci": f1["ci"], "f1_p": f1["p"],
+                "f1_p_holm": p_f1}
+    tests = [(name, k) for name in paired for k in ("correct_p", "incorrect_p")
+             if not (name == primary and k == "incorrect_p")]
+    for (name, k), adj in zip(tests, holm([paired[name][k] for name, k in tests]), strict=True):
+        paired[name][k + "_holm"] = adj
+    return {"systems": out, "reference": ref, "paired": paired, "primary": head, "questions": len(qids)}
