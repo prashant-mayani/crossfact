@@ -266,7 +266,7 @@ def call_with_resilience(
         attempt += 1
         if not breaker.allow():
             err = ProviderError(f"circuit open for {breaker.name}; retry in {breaker.retry_in():.0f}s",
-                                ErrorKind.CIRCUIT_OPEN)
+                                ErrorKind.CIRCUIT_OPEN, retry_after=breaker.retry_in())
             err.attempts = attempt - 1
             raise err
         call_timeout = deadline.cap(timeout_s)

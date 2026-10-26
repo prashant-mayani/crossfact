@@ -82,6 +82,26 @@ restore:
   # empty database while a backup exists). To start fresh on purpose, set false.
   enabled: true
 
+eval:
+  # A nightly check of answer quality (docs/EVAL.md): the same ten SimpleQA
+  # Verified questions every night through Claude alone, Claude checking its own
+  # answer, and Crossfact, graded by a model from a family that answers none of
+  # them. Results land in /data/bench and in the crossfact_eval_* metrics (the
+  # overview dashboard's last row). Claude's calls count against your plan like
+  # any message (20 to 40 a night) and the others against free tiers, so it is
+  # off until you turn it on.
+  nightly:
+    enabled: false
+    # After the Gemini free tier's daily reset (midnight Pacific), so the night
+    # doesn't start on a budget the day already spent.
+    schedule: "37 0 * * *"
+    timeZone: America/Los_Angeles
+    config: bench/configs/nightly.yaml
+    activeDeadlineSeconds: 7200
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1536Mi}   # the Claude CLI runs as a subprocess
+
 networkPolicy:
   # The chart's own policies, for clusters without platform-owned ones. The
   # Crossfact deploy repo turns this off and ships stricter policies itself.

@@ -23,7 +23,7 @@ OTLP/HTTP collector works locally, e.g. Jaeger all-in-one listening on 4318).
 ## Checks (the same ones CI runs)
 
     ruff check .                                # lint
-    pytest                                      # about 150 tests, ~20 s, no network
+    pytest                                      # about 190 tests, ~30 s, no network
     python charts/crossfact/dashboards/generate.py && git diff --exit-code charts/crossfact/dashboards/
     charts/crossfact/tests/render.sh              # helm template + kubeconform + promtool rules and tests
     hadolint Dockerfile
@@ -35,7 +35,10 @@ The tests drive the real call path with a scriptable fake model
 metrics and spans all run. Notable ones: `test_drain.py` sends a real SIGTERM to
 a real server process mid-run and checks the run finishes; the Claude tests run
 a fake `claude` binary as a real subprocess to check the sandboxing flags,
-environment and process-group kill.
+environment and process-group kill. `test_bench.py` runs the measurement
+harness end to end with fake models that know some answers and not others,
+through the real Crossfact pipeline: grading, resuming, budget pauses, version
+pinning and the statistics.
 
 ## The pipeline (`.github/workflows/pipeline.yml`)
 
@@ -100,3 +103,7 @@ history or publish from a fresh commit, and run it again until it is clean.
 - **A dashboard**: edit `dashboards/generate.py`, run it, commit both.
 - **The run budget**: `runDeadlineSeconds`; the chart refuses to render unless
   `terminationGracePeriodSeconds` exceeds it by 60 s.
+- **The pipeline, while a measurement is running**: a run of `python -m bench`
+  refuses to resume on changed code (anything under `app/`, or the harness's
+  calls, datasets, grader and systems), so finish it first or start a new one
+  under a new config name; the call cache keeps that cheap. docs/EVAL.md.

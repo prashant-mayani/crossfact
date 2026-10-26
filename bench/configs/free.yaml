@@ -1,0 +1,92 @@
+# The published comparison: free models only, so anyone can rerun it at $0.
+# Three model families answer (OpenAI's open-weight GPT-OSS, Google's Gemini,
+# Alibaba's Qwen); a fourth grades (Meta's Llama), so the grader shares a family
+# with nothing it grades. Claude isn't here: a subscription has no API credits,
+# so it gets the small nightly check instead (nightly.yaml).
+#
+#   python -m bench run --config bench/configs/free.yaml              # resumes daily within the budgets
+#   python -m bench run --config bench/configs/free.yaml --limit 50   # a quick first look
+#
+# Free tiers cap requests (and Groq tokens) per day, so a full run takes days:
+# it stops when a budget is reached and the same command continues it.
+name: free
+dataset: simpleqa_verified
+limit: 200               # a topic-stratified sample; raise to 1000 for the full set
+seed: 1
+stratify: topic
+effort: medium           # reasoning effort for every answer (each model clamps it)
+timeout_s: 300
+
+# Our own caps per UTC day, under each provider's free limits (check yours:
+# Groq console -> Limits; AI Studio -> rate limits; Workers AI: 10,000 neurons/day).
+# Groq's free tier also caps tokens per day (200K for these models), which a
+# reasoning model reaches before its request cap: when Groq says so, the run
+# pauses the same way. Budgets and pace can change mid-run.
+budgets:
+  groq/openai/gpt-oss-120b: 900
+  groq/qwen/qwen3.8-27b: 900
+  gemini/gemini-3.5-flash-lite: 450
+  workers_ai_chat/@cf/meta/llama-3.3-70b-instruct-fp8-fast: 200
+
+# Requests per minute, to stay under per-minute limits (Groq: 30 requests and
+# 8K tokens a minute). A call refused for rate anyway waits and tries again.
+pace:
+  groq/openai/gpt-oss-120b: 6
+  groq/qwen/qwen3.8-27b: 8
+  gemini/gemini-3.5-flash-lite: 10
+
+grader:
+  model: workers_ai_chat/@cf/meta/llama-3.3-70b-instruct-fp8-fast
+  effort: "off"
+
+# Merged over the app's registry for this run only.
+providers:
+  groq:
+    models:
+      - {id: openai/gpt-oss-120b, label: "GPT-OSS 120B (Groq)"}
+      - {id: qwen/qwen3.8-27b, label: "Qwen 3.8 27B (Groq)", supports_reasoning_effort: false,
+         extra_body: {reasoning_format: hidden}}
+  workers_ai_chat:
+    label: Workers AI (chat)
+    kind: openai
+    base_url: https://api.cloudflare.com/client/v4/accounts/{cloudflare_account_id}/ai/v1
+    secret: cloudflare_ai_token
+    enabled: true
+    timeout_s: 120
+    models:
+      - {id: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", label: "Llama 3.3 70B (Workers AI)", temperature: 0}
+
+# Crossfact's pipeline for this run: the same families as the baselines. GPT-OSS
+# and Gemini argue, Qwen judges (it argued neither side), Flash-Lite compares and
+# merges. No fallbacks: a fallback model would make the comparison unequal.
+# Time limits are relaxed: waiting out free-tier rate limits is not slowness,
+# and this run compares answers (latency comes from the nightly).
+pipeline:
+  run_deadline_s: 1800
+  straggler_grace_s: 900
+  utility: {provider: gemini, model: gemini-3.5-flash-lite, effort: "off"}
+  utility_fallbacks: []
+  judge: {provider: groq, model: qwen/qwen3.8-27b, effort: high}
+  judge_fallbacks: []
+  fallbacks: {}
+
+systems:
+  - {name: single-gpt-oss, kind: single, model: groq/openai/gpt-oss-120b}
+  - {name: single-gemini, kind: single, model: gemini/gemini-3.5-flash-lite}
+  - {name: single-qwen, kind: single, model: groq/qwen/qwen3.8-27b}
+  - {name: selfcheck-gpt-oss, kind: selfcheck, model: groq/openai/gpt-oss-120b}
+  - {name: selfcheck-gemini, kind: selfcheck, model: gemini/gemini-3.5-flash-lite}
+  # Self-consistency: GPT-OSS asked three times, the majority answer or "I don't know".
+  # Point it at whichever single model does best in your first look.
+  - {name: selfconsistency-gpt-oss, kind: vote, models: [groq/openai/gpt-oss-120b], samples: 3}
+  - name: vote-3
+    kind: vote
+    models: [groq/openai/gpt-oss-120b, gemini/gemini-3.5-flash-lite, groq/qwen/qwen3.8-27b]
+  - name: moa-3
+    kind: moa
+    models: [groq/openai/gpt-oss-120b, gemini/gemini-3.5-flash-lite, groq/qwen/qwen3.8-27b]
+    aggregator: groq/openai/gpt-oss-120b
+  - {name: crossfact, kind: crossfact, side_a: groq/openai/gpt-oss-120b, side_b: gemini/gemini-3.5-flash-lite}
+
+# Paired comparisons are against the best single model by F1 (or name one here).
+reference: best_single

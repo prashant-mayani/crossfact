@@ -800,6 +800,172 @@
     "type": "prometheus",
     "uid": "${datasource}"
    }
+  },
+  {
+   "type": "row",
+   "title": "Answer quality (nightly check)",
+   "id": 18,
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 39
+   },
+   "panels": []
+  },
+  {
+   "type": "timeseries",
+   "title": "Correct, by system",
+   "description": "The same ten SimpleQA Verified questions every night (docs/EVAL.md). One question is ten points, so read the trend over weeks, not a single night. Empty until eval.nightly.enabled.",
+   "targets": [
+    {
+     "expr": "max by (system) (crossfact_eval_answer_ratio{namespace=\"$namespace\",result=\"correct\"})",
+     "legendFormat": "{{system}}",
+     "refId": "A",
+     "exemplar": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 19,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 40
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Wrong, by system",
+   "description": "Wrong answers, not abstentions: a system that says \"I don't know\" more shows up as fewer wrong and fewer correct together.",
+   "targets": [
+    {
+     "expr": "max by (system) (crossfact_eval_answer_ratio{namespace=\"$namespace\",result=\"incorrect\"})",
+     "legendFormat": "{{system}}",
+     "refId": "A",
+     "exemplar": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 20,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 40
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Since the last check",
+   "description": "A run stopped by a daily budget still counts; its numbers cover the questions it reached.",
+   "targets": [
+    {
+     "expr": "time() - max(crossfact_eval_last_run_timestamp_seconds{namespace=\"$namespace\"})",
+     "legendFormat": "__auto",
+     "refId": "A",
+     "exemplar": false,
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 172800
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value"
+   },
+   "id": 21,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 40
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
   }
  ]
 }

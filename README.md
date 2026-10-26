@@ -50,12 +50,15 @@ empirical question. One 2026 study ("The Cost of Consensus", arXiv 2605.00914)
 found that among identical small models, a model correcting itself matched or
 beat unguided debate at a half to a third of the tokens. That isn't Crossfact's
 setup (different families, debate limited to the conflicts, a neutral judge),
-but it is a warning and a baseline to beat. So the plan is to measure:
-`bench/` (in progress) runs Crossfact and the baselines (best single model, that
-model checking itself, majority vote, Mixture-of-Agents) on the same
-questions, and reports correct, wrong and "not sure" separately, because a
-system that abstains more can look more accurate while answering less. Results
-will go in `docs/EVAL.md`, wins or not.
+but it is a warning and a baseline to beat. So it gets measured: `bench/`
+runs Crossfact and the baselines (each model alone, a model checking its own
+answer, self-consistency, majority vote, Mixture-of-Agents) on the same
+SimpleQA Verified questions, closed-book, and reports correct, wrong and "not
+sure" side by side, because a system that abstains more can look more accurate
+while answering less. The harness is built and tested; the first run, on free
+models (about four days of free-tier quota), hasn't happened yet, so there are
+no numbers. Method, caveats and results, wins or not:
+[docs/EVAL.md](docs/EVAL.md).
 
 ## What is in it
 
@@ -74,6 +77,11 @@ will go in `docs/EVAL.md`, wins or not.
   `python -m app.faults`, a simulator that replays provider outages on a
   laptop in minutes, and written-up results of three rounds, including what
   they found and how it was fixed. [docs/RESILIENCE.md](docs/RESILIENCE.md)
+- **A measurement harness**: `python -m bench` answers a pinned question set
+  with every system through the app's own call path, grades with SimpleQA's
+  rules, resumes across days within free-tier budgets, and refuses to mix code
+  versions in one result. An optional nightly CronJob tracks your own
+  deployment on ten fixed questions. [docs/EVAL.md](docs/EVAL.md)
 - **Three SLOs** (availability from synthetic probes, consensus success,
   consensus latency) with multiwindow burn-rate alerts, a low-traffic guard,
   and promtool unit tests that prove the alerts fire and stay quiet when they

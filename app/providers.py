@@ -406,10 +406,14 @@ def _ask_gemini_api(p, model, effort, prompt, files, timeout):
 
 # ---- openai-compatible ------------------------------------------------------------------------------
 
-def openai_effort(p: dict, effort: str) -> str | None:
-    if not p.get("supports_reasoning_effort"):
+def openai_effort(p: dict, effort: str, model: str = "") -> str | None:
+    """A model entry may override its provider's settings (one provider can serve a
+    reasoning model and one that takes no reasoning_effort at all)."""
+    m = model_cfg(p, model) if model else {}
+    if not m.get("supports_reasoning_effort", p.get("supports_reasoning_effort")):
         return None
-    levels = [lvl for lvl in OPENAI_LEVELS if lvl in (p.get("reasoning_efforts") or ["low", "medium", "high"])]
+    allowed = m.get("reasoning_efforts") or p.get("reasoning_efforts") or ["low", "medium", "high"]
+    levels = [lvl for lvl in OPENAI_LEVELS if lvl in allowed]
     want = OPENAI_LEVELS.index(OPENAI_WANT.get(effort, "medium"))
     return min(levels, key=lambda lvl: (abs(OPENAI_LEVELS.index(lvl) - want), -OPENAI_LEVELS.index(lvl)))
 
@@ -435,7 +439,7 @@ def _ask_openai(p, model, effort, prompt, files, timeout):
             with open(f, encoding="utf-8", errors="replace") as fh:
                 prompt = f"[file {os.path.basename(f)}]\n{fh.read()[:MAX_INLINE_TEXT]}\n\n" + prompt
     responses_api = p.get("api") == "responses"
-    level = openai_effort(p, effort)
+    level = openai_effort(p, effort, model)
     if responses_api:
         url = f"{base_url(p)}/responses"
         body = {"model": model, "input": [{"role": "user", "content": prompt}]}
@@ -449,6 +453,7 @@ def _ask_openai(p, model, effort, prompt, files, timeout):
     temperature = model_cfg(p, model).get("temperature")
     if temperature is not None:
         body["temperature"] = temperature
+    body.update(model_cfg(p, model).get("extra_body") or {})  # e.g. a provider's reasoning_format
     try:
         resp = httpx.post(url, headers={"Authorization": f"Bearer {key}"} if key else {}, json=body,
                           timeout=timeout)
@@ -468,7 +473,8 @@ def _ask_openai(p, model, effort, prompt, files, timeout):
         text = _responses_text(data) if responses_api else (data["choices"][0]["message"]["content"] or "")
     except (KeyError, IndexError, ValueError, TypeError, AttributeError):
         raise ProviderError(f"{p.get('label')}: unexpected response shape", ErrorKind.SERVER) from None
-    if not text.strip():
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()  # reasoning some models put in the answer
+    if not text:
         raise ProviderError(f"{p.get('label')} returned an empty answer", ErrorKind.SERVER)
     return text
 

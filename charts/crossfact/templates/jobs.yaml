@@ -55,3 +55,77 @@ spec:
               command: [python, scripts/maintain.py, verify]
               {{- include "crossfact.jobContainer" . | nindent 14 }}
 {{- end }}
+{{- if .Values.eval.nightly.enabled }}
+---
+# The nightly answer-quality check (docs/EVAL.md). Needs the model keys, so it
+# mounts the app's secrets; never the backup key. A run stopped by a daily budget
+# exits 0 (--pause-ok): that is pacing, not a failure.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: crossfact-eval-nightly
+  labels:
+    {{- include "crossfact.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.eval.nightly.schedule | quote }}
+  {{- with .Values.eval.nightly.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 7200
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ int .Values.eval.nightly.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "crossfact.selector" . | nindent 12 }}
+            app.kubernetes.io/component: eval
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          enableServiceLinks: false
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: eval
+              image: {{ include "crossfact.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: [python, -m, bench, --dir, /data/bench, run, --config, {{ .Values.eval.nightly.config | quote }},
+                        --json, /data/bench/latest.json, --pause-ok]
+              env:
+                - name: CROSSFACT_CONFIG
+                  value: /etc/crossfact/config.yaml
+                - name: CROSSFACT_PROVIDERS
+                  value: /etc/crossfact/providers.yaml
+                - name: CROSSFACT_BENCH_LOCK       # the image is read-only: dataset pins live on the volume
+                  value: /data/bench/datasets.lock.json
+                - name: CROSSFACT_FAULTS           # a game day's injected faults don't reach the nightly
+                  value: "off"
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              resources:
+                {{- toYaml .Values.eval.resources | nindent 16 }}
+              volumeMounts:
+                - {name: data, mountPath: /data}
+                - {name: config, mountPath: /etc/crossfact, readOnly: true}
+                - {name: secrets, mountPath: /var/run/secrets/crossfact, readOnly: true}
+                - {name: tmp, mountPath: /tmp}
+          volumes:
+            {{- include "crossfact.volumes" . | nindent 12 }}
+            - name: secrets
+              secret:
+                secretName: {{ include "crossfact.secretName" . }}
+                defaultMode: 0440
+{{- end }}

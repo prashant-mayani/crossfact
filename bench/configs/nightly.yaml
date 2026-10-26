@@ -1,0 +1,46 @@
+# A small nightly check on your own deployment, Claude included: the same ten
+# questions every night, no cache, so a change in a model or a provider shows up
+# as a change in the numbers. Runs in the cluster (the chart's eval.nightly
+# CronJob), where the keys are; its results feed the crossfact_eval_* metrics.
+#
+# Claude's calls count against your plan's usage like any message: 20 to 40 a
+# night. Crossfact's second side here is Gemini Flash-Lite, not the app's default
+# Gemini 3.8 Flash: 3.8 Flash's free tier allows only about 20 requests a day,
+# and the nightly would spend most of them before your day starts. If your
+# quota is larger, set side_b to gemini/gemini-3.8-flash.
+#
+# Ten questions is small: one question is ten points, so read trends over weeks.
+# The published comparison is free.yaml, on 200 questions.
+name: nightly
+dataset: simpleqa_verified
+limit: 10
+seed: 7
+stratify: topic
+effort: medium
+cache: false             # measure tonight's models, not last week's answers
+timeout_s: 300
+budgets:
+  claude/sonnet: 45
+  gemini/gemini-3.5-flash-lite: 80
+  gemini/gemini-3.8-flash: 5          # only as the comparator's fallback
+  groq/openai/gpt-oss-120b: 40        # the judge
+  workers_ai/@cf/openai/gpt-oss-120b: 20
+  workers_ai_chat/@cf/meta/llama-3.3-70b-instruct-fp8-fast: 40   # the grader: about 47 neurons a grade
+grader:
+  model: workers_ai_chat/@cf/meta/llama-3.3-70b-instruct-fp8-fast
+  effort: "off"
+providers:
+  workers_ai_chat:
+    label: Workers AI (chat)
+    kind: openai
+    base_url: https://api.cloudflare.com/client/v4/accounts/{cloudflare_account_id}/ai/v1
+    secret: cloudflare_ai_token
+    enabled: true
+    timeout_s: 120
+    models:
+      - {id: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", label: "Llama 3.3 70B (Workers AI)", temperature: 0}
+systems:
+  - {name: single-claude, kind: single, model: claude/sonnet}
+  - {name: selfcheck-claude, kind: selfcheck, model: claude/sonnet}
+  - {name: crossfact, kind: crossfact, side_a: claude/sonnet, side_b: gemini/gemini-3.5-flash-lite}
+reference: single-claude

@@ -9,6 +9,7 @@ charts
 docs
 tests
 data
+bench/runs
 *.md
 requirements-dev.*
 scripts/gameday_sim.py

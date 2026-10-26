@@ -53,6 +53,7 @@ WORKDIR /app
 COPY app ./app
 COPY scripts ./scripts
 COPY config ./config
+COPY bench ./bench
 
 USER 10001:10001
 EXPOSE 8080 9095

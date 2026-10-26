@@ -1,0 +1,125 @@
+# Questions with one exact answer: arithmetic, number bases, units, dates, counting.
+# Closed-book, no knowledge needed, so they test whether models (and their
+# consensus) get exact things exactly right. Every answer here was computed by
+# a script, not written by hand. Use: dataset: exact.yaml
+questions:
+- id: arith-1
+  question: What is 487 multiplied by 36?
+  answer: '17532'
+  topic: arithmetic
+- id: arith-2
+  question: What is 9,876 minus 4,789?
+  answer: '5087'
+  topic: arithmetic
+- id: arith-3
+  question: What is 2 to the power of 20?
+  answer: '1048576'
+  topic: arithmetic
+- id: arith-4
+  question: What is the sum of the whole numbers from 1 to 50?
+  answer: '1275'
+  topic: arithmetic
+- id: arith-5
+  question: What is 15% of 840?
+  answer: '126'
+  topic: arithmetic
+- id: arith-6
+  question: What is the square root of 15,129?
+  answer: '123'
+  topic: arithmetic
+- id: arith-7
+  question: What is 7 factorial?
+  answer: '5040'
+  topic: arithmetic
+- id: arith-8
+  question: What is the remainder when 2 to the power of 10 is divided by 7?
+  answer: '2'
+  topic: arithmetic
+- id: arith-9
+  question: What is the greatest common divisor of 462 and 1071?
+  answer: '21'
+  topic: arithmetic
+- id: arith-10
+  question: What is 1/8 written as a decimal?
+  answer: '0.125'
+  topic: arithmetic
+- id: num-1
+  question: What is the 25th prime number?
+  answer: '97'
+  topic: numbers
+- id: num-2
+  question: What is the smallest prime number greater than 1000?
+  answer: '1009'
+  topic: numbers
+- id: num-3
+  question: What is 45 written in binary?
+  answer: '101101'
+  topic: numbers
+- id: num-4
+  question: Write 1987 in Roman numerals.
+  answer: MCMLXXXVII
+  topic: numbers
+- id: num-5
+  question: What is 255 written in hexadecimal?
+  answer: FF
+  topic: numbers
+- id: units-1
+  question: How many seconds are in one day?
+  answer: '86400'
+  topic: units
+- id: units-2
+  question: How many minutes are in one week?
+  answer: '10080'
+  topic: units
+- id: units-3
+  question: How many centimetres are in 7.5 feet? (1 foot is exactly 30.48 cm.)
+  answer: '228.6'
+  topic: units
+- id: units-4
+  question: What is 98.6 degrees Fahrenheit in degrees Celsius?
+  answer: '37'
+  topic: units
+- id: units-5
+  question: How many days is one million seconds, rounded to two decimal places?
+  answer: '11.57'
+  topic: units
+- id: dates-1
+  question: What day of the week was 1 January 2000?
+  answer: Saturday
+  topic: dates
+- id: dates-2
+  question: What day of the week was 4 July 1776?
+  answer: Thursday
+  topic: dates
+- id: dates-3
+  question: How many days are there from 3 March 2024 to 17 October 2024 (counting 17 October but not 3 March)?
+  answer: '228'
+  topic: dates
+- id: dates-4
+  question: A train leaves at 14:35 and the trip takes 3 hours and 50 minutes. At what time does it arrive, on the 24-hour clock?
+  answer: '18:25'
+  topic: dates
+- id: dates-5
+  question: Was 1900 a leap year? Answer yes or no.
+  answer: 'no'
+  topic: dates
+- id: words-1
+  question: How many times does the letter r appear in the word strawberry?
+  answer: '3'
+  topic: words
+- id: words-2
+  question: How many letters are in the English word 'encyclopedia'?
+  answer: '12'
+  topic: words
+- id: geom-1
+  question: How many edges does a cube have?
+  answer: '12'
+  topic: geometry
+- id: geom-2
+  question: What is the sum of the interior angles of a hexagon, in degrees?
+  answer: '720'
+  topic: geometry
+- id: geom-3
+  question: What is the area of a right triangle with legs of 9 and 12 units?
+  answer: '54'
+  topic: geometry

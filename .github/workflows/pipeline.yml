@@ -173,6 +173,10 @@ jobs:
         env:
           REF: ${{ steps.name.outputs.image }}@${{ steps.push.outputs.digest }}
         run: docker run --rm --network none --entrypoint python "$REF" scripts/check_claude_cli.py
+      - name: The measurement harness in the image starts (the nightly CronJob runs it)
+        env:
+          REF: ${{ steps.name.outputs.image }}@${{ steps.push.outputs.digest }}
+        run: docker run --rm --network none --entrypoint python "$REF" -m bench --help
       - name: Gate on fixable critical CVEs before signing
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

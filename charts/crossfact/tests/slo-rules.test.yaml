@@ -130,6 +130,24 @@ tests:
               summary: "The app is held down: its restore step can't read the backup (crossfact-7d9-x)."
               runbook_url: https://github.com/OWNER/crossfact/blob/main/docs/SLO.md#restore-blocked
 
+  - name: a nightly check that stops finishing is noticed after three days
+    interval: 6h
+    input_series:
+      # last success at t=0 (value 0 s since epoch in the test clock), then nothing new
+      - series: 'kube_cronjob_status_last_successful_time{namespace="crossfact",cronjob="crossfact-eval-nightly"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 2d
+        alertname: CrossfactEvalStale
+        exp_alerts: []
+      - eval_time: 3d6h
+        alertname: CrossfactEvalStale
+        exp_alerts:
+          - exp_labels: {severity: info}
+            exp_annotations:
+              summary: The nightly answer-quality check hasn't completed in three days.
+              runbook_url: https://github.com/OWNER/crossfact/blob/main/docs/SLO.md#eval-stale
+
   # --- recorded SLI values are what the docs say they are -----------------------------
   - name: availability window counts gaps as downtime
     interval: 30s

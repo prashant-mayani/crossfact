@@ -211,6 +211,18 @@ chart value `restore.enabled: false` for one sync, then set it back, and run
 the next backup with `--force` (above): the backup check would otherwise refuse
 to replace the old backup with the empty database.
 
+<a id="eval-stale"></a>
+### CrossfactEvalStale (info)
+
+Only with `eval.nightly.enabled`. The nightly answer-quality check (docs/EVAL.md)
+hasn't completed in three days, so the *Answer quality* row is going stale.
+Nothing users see is affected. `kubectl -n crossfact get jobs -l
+app.kubernetes.io/component=eval`, then the logs of the newest one. A night
+stopped by a daily budget completes normally (it reports what it reached), so
+this means the job failed: usually a model in `bench/configs/nightly.yaml` that
+has no key here (the log names it), or a provider that was down all night. Run
+it by hand: `kubectl -n crossfact create job --from=cronjob/crossfact-eval-nightly eval-now`.
+
 ## How the rules are tested
 
 `charts/crossfact/tests/render.sh` renders the chart, extracts the rules, runs
@@ -223,6 +235,7 @@ to replace the old backup with the empty database.
 - half of successful runs slower than 240 s warns
 - no scrapeable pod fires `CrossfactDown`; an abandoned run fires `CrossfactRunsAbandoned`
 - a restore step stuck in CrashLoopBackOff for 5 minutes fires `CrossfactRestoreBlocked`
+- a nightly check that last succeeded three days ago fires `CrossfactEvalStale`; two days doesn't
 - the availability SLI counts a gap in the data as downtime
 
 ## Dashboards
@@ -230,4 +243,5 @@ to replace the old backup with the empty database.
 *Crossfact SLOs*: each SLI over 28 days, budget remaining, error ratio per window
 with run counts. *Crossfact overview*: runs and outcomes, run and model-call
 latency with exemplars, call outcomes, retries by cause, breaker states,
-substitutions, HTTP, drain/orphans/faults.
+substitutions, HTTP, drain/orphans/faults, and the nightly check's correct and
+wrong answers by system.

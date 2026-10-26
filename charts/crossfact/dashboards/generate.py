@@ -165,6 +165,22 @@ def overview() -> dict:
                    target(f"sum(increase(crossfact_orphaned_runs_total{{{NS}}}[1h]))", "orphaned runs"),
                    target(f"sum(crossfact_fault_injections_active{{{NS}}})", "active faults")),
     ])
+    b.row("Answer quality (nightly check)")
+    nightly = ("The same ten SimpleQA Verified questions every night (docs/EVAL.md). One question is ten "
+               "points, so read the trend over weeks, not a single night. Empty until eval.nightly.enabled.")
+    b.add([
+        timeseries("Correct, by system",
+                   target(f'max by (system) (crossfact_eval_answer_ratio{{{NS},result="correct"}})', "{{system}}"),
+                   unit="percentunit", desc=nightly),
+        timeseries("Wrong, by system",
+                   target(f'max by (system) (crossfact_eval_answer_ratio{{{NS},result="incorrect"}})', "{{system}}"),
+                   unit="percentunit",
+                   desc="Wrong answers, not abstentions: a system that says \"I don't know\" more shows up as "
+                        "fewer wrong and fewer correct together."),
+        stat("Since the last check", f"time() - max(crossfact_eval_last_run_timestamp_seconds{{{NS}}})", unit="s",
+             desc="A run stopped by a daily budget still counts; its numbers cover the questions it reached.",
+             thresholds=[{"color": "green", "value": None}, {"color": "orange", "value": 2 * 86400}]),
+    ])
     return b.json()
 
 

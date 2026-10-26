@@ -318,3 +318,17 @@ def test_an_empty_answer_is_a_failure_not_a_blank(env, monkeypatch):
     with pytest.raises(ProviderError) as e:
         providers._ask_openai(GROQ, "openai/gpt-oss-120b", "low", "q", None, 30)
     assert e.value.kind is ErrorKind.SERVER
+
+
+def test_a_model_can_opt_out_of_its_providers_reasoning_settings(env, monkeypatch):
+    """One provider, two models: GPT-OSS takes reasoning_effort, a Qwen model takes none
+    and puts its thinking in the answer unless told otherwise."""
+    p = {**GROQ, "models": [{"id": "openai/gpt-oss-120b"},
+                            {"id": "qwen/qwen3.8-27b", "supports_reasoning_effort": False,
+                             "extra_body": {"reasoning_format": "hidden"}}]}
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    fake = FakeHTTP((200, chat_body("<think>hmm</think>\nParis")))
+    monkeypatch.setattr(providers.httpx, "post", fake)
+    assert providers._ask_openai(p, "qwen/qwen3.8-27b", "high", "q", None, 30) == "Paris"
+    body = fake.requests[0]["json"]
+    assert "reasoning_effort" not in body and body["reasoning_format"] == "hidden"

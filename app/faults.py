@@ -2,7 +2,9 @@
 
 A fault targets "provider", "provider/model" or "*", has a mode and a
 probability, and always expires (no forgotten chaos). Faults live in SQLite so
-every pod sees them, and they are cached for a few seconds per pod.
+every pod sees them, and they are cached for a few seconds per pod. A process
+started with CROSSFACT_FAULTS=off ignores them (the answer-quality harness: a game
+day must not change what the nightly check measures).
 
 Modes:
   error       raise a server error (exercises retries and the breaker)
@@ -14,6 +16,7 @@ Modes:
 """
 from __future__ import annotations
 
+import os
 import random
 import sqlite3
 import threading
@@ -30,6 +33,8 @@ _lock = threading.Lock()
 
 def active(now: float | None = None) -> list[dict]:
     global _cache
+    if os.environ.get("CROSSFACT_FAULTS") == "off":
+        return []
     now = now or time.time()
     with _lock:
         if now - _cache[0] < _CACHE_S:

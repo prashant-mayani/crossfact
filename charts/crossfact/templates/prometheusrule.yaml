@@ -193,6 +193,17 @@ spec:
             summary: The weekly restore test hasn't passed in over 8 days.
             runbook_url: {{ $runbook }}#backups
         {{- end }}
+        {{- if .Values.eval.nightly.enabled }}
+        - alert: CrossfactEvalStale
+          # Answer quality isn't being measured: the nightly check hasn't finished
+          # (a run paused on a daily budget counts as finished) in three days.
+          expr: |
+            time() - max(kube_cronjob_status_last_successful_time{namespace="{{ $ns }}",cronjob="crossfact-eval-nightly"}) > 3 * 86400
+          labels: {severity: info}
+          annotations:
+            summary: The nightly answer-quality check hasn't completed in three days.
+            runbook_url: {{ $runbook }}#eval-stale
+        {{- end }}
         {{- if .Values.restore.enabled }}
         - alert: CrossfactRestoreBlocked
           # The app pod's restore step keeps failing: the volume has no database and
