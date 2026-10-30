@@ -30,7 +30,7 @@ pipeline:
   # Comparator and merge are extraction tasks, not reasoning: cheap, fast, thinking minimal.
   utility: {provider: gemini, model: gemini-3.5-flash-lite, effort: "off"}
   utility_fallbacks:
-    - {provider: gemini, model: gemini-3.8-flash, effort: low}
+    - {provider: gemini, model: gemini-3.6-flash, effort: low}
     - {provider: groq, model: openai/gpt-oss-120b, effort: low}
     - {provider: claude, model: haiku, effort: low}
 
@@ -42,19 +42,28 @@ pipeline:
   judge: {provider: groq, model: openai/gpt-oss-120b, effort: high}
   judge_fallbacks:
     - {provider: workers_ai, model: "@cf/openai/gpt-oss-120b", effort: high}
-    - {provider: gemini, model: gemini-3.8-flash, effort: high}
+    - {provider: gemini, model: gemini-3.6-flash, effort: high}
     - {provider: claude, model: sonnet, effort: high}
 
   # Substitutes for a side whose model fails (after its own retries). A run
   # answered by a substitute is still two-model, and the UI says who stood in.
   fallbacks:
     gemini/gemini-3.8-flash: [{model: gemini-3.6-flash}, {model: gemini-3.5-flash-lite}]
+    gemini/gemini-3.6-flash: [{model: gemini-3.5-flash-lite}]
     gemini/gemini-4-argon: [{model: gemini-3.8-flash}]
     claude/opus: [{model: sonnet}]
 
 defaults:
   side_a: {provider: claude, model: sonnet, effort: medium}
-  side_b: {provider: gemini, model: gemini-3.8-flash, effort: medium}
+  # Side B starts on Gemini 3.6 Flash and moves to 3.8 Flash only while 3.8 is
+  # healthy (app/promotion.py): checked every 30 minutes while unused, adopted
+  # after 2 passes in a row, dropped at its first failure. 3.8 Flash's free tier
+  # allows about 20 requests a day, so there are no checks while it is in use.
+  side_b:
+    provider: gemini
+    model: gemini-3.6-flash
+    effort: medium
+    prefer: {model: gemini-3.8-flash, check_every_s: 1800, passes: 2, timeout_s: 60}
 
 providers:
   claude:

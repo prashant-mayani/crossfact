@@ -17,7 +17,7 @@
     <a href="/chat">Chats</a>
     <a href="/files">Files</a>
     {% if user.role == 'admin' %}<a href="/admin">Admin</a>{% endif %}
-    <a href="/settings">{{ user.username }}</a>
+    <a href="/settings" title="Signed in as {{ user.username }}">Settings</a>
     <form method="post" action="/logout" class="inline"><button class="link">Sign out</button></form>
   </nav>
 </header>

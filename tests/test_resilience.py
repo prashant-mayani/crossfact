@@ -115,6 +115,20 @@ def test_transient_failures_are_retried_until_success():
     assert [k for _, k, _ in retries] == [ErrorKind.SERVER, ErrorKind.SERVER]
 
 
+@pytest.mark.parametrize("status", [503, 529])
+def test_overloaded_answers_go_to_the_substitute_instead_of_retrying(status):
+    calls, breaker = [], CircuitBreaker("p/m", clock=Clock())
+
+    def busy(timeout):
+        calls.append(1)
+        raise ProviderError(f"gemini {status}: high demand", ErrorKind.SERVER, status=status)
+
+    with pytest.raises(ProviderError):
+        _call(busy, breaker=breaker)
+    assert len(calls) == 1                       # no retry on the same busy model
+    assert breaker.snapshot()["failures"] == 1   # but the breaker still counts it
+
+
 def test_auth_errors_fail_fast():
     calls = []
 

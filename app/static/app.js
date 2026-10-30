@@ -202,21 +202,17 @@
     const btn = e.target.closest('button.retry');
     if (!btn) return;
     const el = btn.closest('.msg.assistant');
-    let sides = {};
-    try { sides = JSON.parse(el.dataset.sides || '{}'); } catch (_) { /* keep defaults */ }
     const question = el.dataset.question || (el.previousElementSibling && el.previousElementSibling.textContent) || '';
     if (!question.trim()) return;
+    // A retry asks again with what the pickers show now, so changing a model and
+    // pressing Retry tries the new model (it used to repeat the failed run's models).
     const fd = new FormData();
     fd.set('question', question.trim());
     fd.set('thread_id', composer.querySelector('[name="thread_id"]').value);
-    fd.set('mode', el.dataset.mode || 'consensus');
+    fd.set('mode', modeSel.value || el.dataset.mode || 'consensus');
     fd.set('file_ids', el.dataset.files || '');
-    for (const s of ['A', 'B']) {
-      const cfg = sides[s] || {};
-      const k = s.toLowerCase();
-      fd.set(`${k}_provider`, cfg.provider || $(`select[name="${k}_provider"]`).value);
-      fd.set(`${k}_model`, cfg.model || $(`select[name="${k}_model"]`).value);
-      fd.set(`${k}_effort`, cfg.effort || $(`select[name="${k}_effort"]`).value);
+    for (const k of ['a', 'b']) {
+      for (const f of ['provider', 'model', 'effort']) fd.set(`${k}_${f}`, $(`select[name="${k}_${f}"]`).value);
     }
     btn.disabled = true;
     submit(fd, question.trim());

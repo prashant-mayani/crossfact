@@ -45,6 +45,10 @@ CIRCUIT_TRANSITIONS = Counter("crossfact_circuit_transitions", "Breaker state ch
 ORPHANS = Counter("crossfact_orphaned_runs", "Runs found abandoned by a dead pod and closed out")
 DRAINING = Gauge("crossfact_draining", "1 while this pod is draining for shutdown")
 FAULTS_ACTIVE = Gauge("crossfact_fault_injections_active", "Active injected faults", ["target", "mode"])
+PREFERRED_ACTIVE = Gauge("crossfact_preferred_model_active",
+                         "1 while new questions on a side start with its preferred model (app/promotion.py)", ["side"])
+PREFERRED_CHECKS = Counter("crossfact_preferred_model_checks", "Background checks of a side's preferred model",
+                           ["side", "result"])
 
 class _ScrapeWatch:
     """Notes that something has read this pod's metrics: on the metrics port, only

@@ -21,9 +21,10 @@ from fastapi.templating import Jinja2Templates
 
 from . import auth, db, evalmetrics, faults, orchestrator, providers
 from . import telemetry as tm
-from .config import VERSION, cfg, pipeline_setting, registry
+from .config import VERSION, cfg, pipeline_setting
 from .lifecycle import INSTANCE_ID, LIFECYCLE
 from .orchestrator import run_pipeline
+from .promotion import PROMOTIONS
 from .providers import EFFORTS, enabled_providers, health
 
 log = logging.getLogger("crossfact")
@@ -46,7 +47,9 @@ async def lifespan(_app: FastAPI):
     tm.init_tracing(cfg()["tracing"], VERSION)
     tm.start_metrics_server(int(cfg()["server"]["metrics_port"]))
     LIFECYCLE.start()
+    PROMOTIONS.start()  # background checks of any side's preferred model (defaults.<side>.prefer)
     yield
+    PROMOTIONS.stop()
     LIFECYCLE.stop()
     tm.shutdown_tracing()  # send the spans still buffered (the runs that finished while draining)
 
@@ -243,7 +246,7 @@ def chat(request: Request, tid: str | None = None):
         msgs = db.thread_messages(tid)
         for m in msgs:
             m["pipeline"] = json.loads(m["pipeline_json"]) if m["pipeline_json"] else None
-    boot = {"providers": ui_registry(), "defaults": registry().get("defaults", {}), "csrf": s["csrf"],
+    boot = {"providers": ui_registry(), "defaults": PROMOTIONS.effective_defaults(), "csrf": s["csrf"],
             "efforts": EFFORTS}
     return page(request, "chat.html", s=s, threads=db.user_threads(s["user_id"]), thread=thread, msgs=msgs,
                 efforts=EFFORTS, files=db.user_files(s["user_id"]), used=db.usage_today(s["user_id"]),

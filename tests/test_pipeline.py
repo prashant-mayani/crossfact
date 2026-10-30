@@ -188,6 +188,15 @@ def test_breaker_opens_and_later_runs_skip_the_broken_model(llm):
     assert [s for s in stages(out, "answer") if s["side"] == "B"][0]["model"] == "b2"
 
 
+def test_an_overloaded_side_is_answered_by_its_substitute_at_once(llm):
+    llm.on(provider="beta", model="b1", error=ProviderError("gemini 503: high demand", ErrorKind.SERVER, status=503))
+    out = run()
+    assert llm.count(provider="beta", model="b1") == 1   # asked once, not retried
+    b = [s for s in stages(out, "answer") if s["side"] == "B"][0]
+    assert b["model"] == "b2" and b["substituted_from"] == "beta/b1"
+    assert out["degraded"] == []
+
+
 def test_disabled_provider_is_reported_not_crashing(llm):
     from app.orchestrator import run_pipeline
 

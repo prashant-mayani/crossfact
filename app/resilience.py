@@ -10,7 +10,7 @@ Error taxonomy (ProviderError.kind) and what each one does:
   rate_limited     yes*    yes**           per-minute 429; *only if the hint fits the budget;
                                            **not when it carries a retry hint we honour
   quota_exhausted  no      yes             daily free-tier quota gone; retrying is pointless
-  server           yes     yes             5xx / overloaded
+  server           yes*    yes             5xx; *not 503/529 "overloaded": go to the substitute
   network          yes     yes             DNS, TLS, connection reset
   auth             no      yes             bad/expired key or token; fail fast, stop hammering
   bad_request      no      no              our request was wrong (unknown model, blocked prompt)
@@ -44,6 +44,12 @@ class ErrorKind(StrEnum):
 RETRYABLE = {ErrorKind.TIMEOUT, ErrorKind.RATE_LIMITED, ErrorKind.SERVER, ErrorKind.NETWORK, ErrorKind.UNKNOWN}
 TRIPS_BREAKER = {ErrorKind.TIMEOUT, ErrorKind.RATE_LIMITED, ErrorKind.QUOTA_EXHAUSTED, ErrorKind.SERVER,
                  ErrorKind.NETWORK, ErrorKind.AUTH, ErrorKind.UNKNOWN}
+# A model that answers "overloaded" (503; Anthropic's 529) is shedding load for
+# minutes, and Gemini takes about a minute to say so. Retrying it spent a side's
+# whole straggler grace before its substitute got a turn (October 2026: Gemini
+# 3.8 Flash at "high demand" while 3.6 Flash answered in 6 s), so these go
+# straight to the next model in the chain. The breaker still counts them.
+OVERLOADED_STATUSES = {503, 529}
 
 
 class ProviderError(RuntimeError):
@@ -102,6 +108,8 @@ class RetryPolicy:
     def delay_for(self, err: ProviderError, attempt: int, rng: Callable[[], float] = random.random) -> float | None:
         """Seconds to wait before the next attempt, or None if retrying is pointless."""
         if err.kind not in RETRYABLE:
+            return None
+        if err.kind is ErrorKind.SERVER and err.status in OVERLOADED_STATUSES:
             return None
         if err.kind is ErrorKind.RATE_LIMITED and err.retry_after is not None:
             if err.retry_after > self.max_delay_s:

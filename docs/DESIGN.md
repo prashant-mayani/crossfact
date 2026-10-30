@@ -148,6 +148,20 @@ Why each rule:
 - **Substitutes**: when a side's model fails after its own retries, the
   configured fallbacks for that model are tried in order. Utility and judge
   steps have fallback chains too, so the judge can be Claude when Gemini is out.
+- **"Overloaded" is not retried.** A 503 or 529 means the model is shedding
+  load for minutes, and Gemini takes about a minute to say so; three attempts
+  outlasted the straggler grace, so the substitute never got a turn. The next
+  model in the chain answers instead (the breaker still counts the failure).
+- **Preferred models are earned** (`app/promotion.py`): a side's default can
+  name a model it would rather use (`defaults.side_b.prefer`). New questions
+  start on the dependable model; while they do, a background check asks the
+  preferred one a single tiny question every 30 minutes, and after 2 passes in
+  a row new questions start on it. Its first failure, in a check or in a real
+  question, hands the default back. Breakers alone would test a recovering
+  model on a user's question every few minutes, and Gemini answers "high
+  demand" only after about a minute; the checks never make anyone wait. They
+  stop while the preferred model is in use, because its free tier can be as
+  small as 20 requests a day. An explicit choice in the UI always wins.
 - **Straggler cutoff**: once one side has answered, the other gets
   `straggler_grace_s` (150 s) more, then the run continues without it. Its call
   keeps running in the background until its own timeout and the result is
