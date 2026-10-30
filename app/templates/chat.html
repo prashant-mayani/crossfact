@@ -9,13 +9,13 @@
   'judge_failed': 'The models still disagreed and no judge was available, so both positions are shown.',
   'deadline': 'Stopped early to stay inside the time limit; anything unfinished is shown as it stood.',
   'merge_failed': 'Merging failed, so both answers are shown in full.'} %}
-{% set CHIP = {'abandoned': 'interrupted', 'error': 'failed'} %}
-{% set ROUTED = 'Answered by side A alone: a calculation or a simple, settled fact. Not cross-checked; pick consensus mode to have both models check it.' %}
+{% set CHIP = {'abandoned': 'interrupted', 'error': 'failed', 'unsure': 'not sure', 'majority': '2 of 3'} %}
 
 {% macro stage_view(st) -%}
 <div class="stage {{ st.stage }}">
   <div class="stagehead">{{ st.stage }}
-    {%- if st.side %} · side {{ st.side }}{% endif %}
+    {%- if st.side %} · {{ 'third model' if st.side == 'C' else 'side ' ~ st.side }}{% endif %}
+    {%- if st.kind and st.stage == 'exact' %} · {{ st.kind }}{% endif %}
     {%- if st.provider %} · {{ st.provider }}/{{ st.model }} ({{ st.effort }}){% endif %}
     {%- if st.round %} · round {{ st.round }}{% endif %}
     {%- if st.attempts and st.attempts > 1 %} · {{ st.attempts }} attempts{% endif %}
@@ -37,6 +37,10 @@ B: {{ st.b }}</pre>
     <pre>{{ st.analysis }}</pre>
   {% elif st.stage == 'error' %}<pre class="err">{{ st.where }}{% if st.model %} ({{ st.model }}){% endif %}{% if st.kind %} · {{ st.kind }}{% endif %}: {{ st.detail }}</pre>
   {% elif st.stage == 'note' %}<pre>{{ st.detail }}</pre>
+  {% elif st.stage == 'exact' %}<pre>{{ st.working }}</pre>
+  {% elif st.stage == 'fact' %}<div class="cmp"><b>verdict:</b> {{ CHIP.get(st.verdict, st.verdict) }}</div>
+    <pre>{% for x in st.answers %}{{ x.model }}: {{ 'not sure' if x.answer.strip() in ('', '?') else x.answer }}
+{% endfor %}</pre>
   {% elif st.stage == 'final' %}<div class="cmp">outcome {{ st.outcome }}{% if st.duration_s is defined %} in {{ st.duration_s }}s{% endif %}</div>
   {% endif %}
 </div>
@@ -64,7 +68,8 @@ B: {{ st.b }}</pre>
     {% if not thread %}
       <div class="empty">
         <div class="glyph big">◇</div>
-        <p>Ask once. Both models answer, compare notes, and you get everything either one got right.</p>
+        <p>Ask once. Calculations are worked out in code, short facts are checked by two models, and
+          everything else is argued out point by point, so you get what either model got right.</p>
         <p class="hint">{{ used }} of {{ quota }} runs used today.</p>
       </div>
     {% endif %}
@@ -83,7 +88,7 @@ B: {{ st.b }}</pre>
           <div class="bubble">
             {% if oc %}<span class="chip {{ oc }}">{{ CHIP.get(oc, oc) }}</span>{% endif %}
             {% for r in pl.degraded or [] %}<p class="banner">{{ REASONS.get(r, r) }}</p>{% endfor %}
-            {% if pl.route == 'direct' %}<p class="banner routed">{{ ROUTED }}</p>{% endif %}
+            {% if pl.route_note %}<p class="banner routed {{ oc }}">{{ pl.route_note }}</p>{% endif %}
             <div class="content">{{ m.content }}</div>
             {% if m.status == 'running' %}<div class="running">running<span class="dots"></span></div>{% endif %}
             {% if m.status == 'error' or oc in ('degraded', 'abandoned') %}<button class="retry" type="button">Retry</button>{% endif %}
@@ -115,7 +120,7 @@ B: {{ st.b }}</pre>
       </div>
       <div class="side m">
         <select name="mode" aria-label="Mode">
-          <option value="auto">auto (calculations and simple facts: side A alone)</option>
+          <option value="auto">auto (a route per question)</option>
           <option value="consensus">consensus (debate + judge)</option>
           <option value="union">union only (no debate)</option>
           <option value="single">single (side A only)</option>

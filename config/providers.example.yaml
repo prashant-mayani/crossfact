@@ -25,6 +25,7 @@ pipeline:
   reserve_judge_s: 90          # time kept back for the judge when deciding on another debate round
   reserve_merge_s: 60          # time kept back for the final merge
   straggler_grace_s: 150       # once one side has answered, how long to wait for the other before going on without it
+  fact_grace_s: 30             # the same, once a side has answered a short fact (mode auto): a third model covers the other
   history_char_budget: 24000
 
   # Comparator and merge are extraction tasks, not reasoning: cheap, fast, thinking minimal.

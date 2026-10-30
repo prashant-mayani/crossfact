@@ -108,9 +108,11 @@ def overview() -> dict:
     b.row("Runs")
     b.add([
         stat("Runs (24h)", f"sum(increase(crossfact_runs_total{{{NS}}}[24h]))", decimals=0),
+        # Runs that asked two models and got both (computed answers asked none: left out)
         stat("Full two-model results (24h)",
-             f'sum(increase(crossfact_runs_total{{{NS},outcome=~"agreed|debated|judged|union"}}[24h])) / '
-             f'sum(increase(crossfact_runs_total{{{NS},mode!="single"}}[24h]))', unit="percentunit", decimals=1),
+             f'sum(increase(crossfact_runs_total{{{NS},outcome=~"agreed|debated|judged|union|majority|unsure"}}'
+             f'[24h])) / sum(increase(crossfact_runs_total{{{NS},mode!~"single|exact"}}[24h]))',
+             unit="percentunit", decimals=1),
         stat("Degraded (24h)", f"sum(increase(crossfact_degraded_runs_total{{{NS}}}[24h]))", decimals=0,
              thresholds=[{"color": "green", "value": None}, {"color": "orange", "value": 1}]),
         stat("In flight now", f"sum(crossfact_runs_in_flight{{{NS}}})", decimals=0),

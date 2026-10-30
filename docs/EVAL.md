@@ -28,7 +28,8 @@ silently changed dataset can't change the numbers.
 **Closed-book, one instruction.** No system gets search or tools. Every system
 gets the same question and the same instruction: *reply with only the answer;
 if you are not confident it is correct, reply "I don't know"*. Crossfact's
-pipeline sees it too, as part of the question.
+pipeline sees it too, after the question (mode `auto` picks its route from the
+question alone).
 
 **The systems** (`bench/configs/free.yaml`, free models only, so anyone can
 rerun it at $0):
@@ -40,7 +41,8 @@ rerun it at $0):
 | `selfconsistency-gpt-oss` | GPT-OSS asked three times; the majority answer, or "I don't know" | 2 |
 | `vote-3` | the three models; an answer at least two give, or "I don't know" | 0 |
 | `moa-3` | Mixture-of-Agents, one layer: GPT-OSS reads all three answers and writes the final one | 1 |
-| `crossfact` | the app's pipeline, unchanged: GPT-OSS and Gemini answer, Flash-Lite compares and merges, they debate only conflicts, Qwen judges what is left | 2 (they agree) to 12 (three rounds and a ruling) |
+| `crossfact` | the app's pipeline in consensus mode, unchanged: GPT-OSS and Gemini answer, Flash-Lite compares and merges, they debate only conflicts, Qwen judges what is left | 2 (they agree) to 12 (three rounds and a ruling) |
+| `crossfact-auto` | the app's default, mode `auto` (docs/DESIGN.md, "Routes"): GPT-OSS and Gemini answer; a short fact is answered only when both give it, or when Qwen gives it on its own beside a "not sure"; otherwise "not sure". Other questions run the consensus above, and calculations are computed in code | 0 to 4 for a short fact; as `crossfact` otherwise |
 
 Why these baselines:
 
@@ -109,15 +111,19 @@ the systems with each other, all graded the same way.
 
 Written down before any real result, so the numbers can't choose the question.
 
-**The headline** is one comparison: **Crossfact against the best single model by
-F1**, on the questions both answered, on two measures: the change in **wrong
-answers** (exact McNemar test) and the change in **F1** (paired permutation
-test, with a paired bootstrap interval), Holm-adjusted over the two. It is
-printed first and named as the headline in every report (`primary` in the
-config). Everything else is secondary: the comparison table holds sixteen
+**The headline** is one comparison: **Crossfact as the app runs it
+(`crossfact-auto`) against the best single model by F1**, on the questions both
+answered, on two measures: the change in **wrong answers** (exact McNemar test)
+and the change in **F1** (paired permutation test, with a paired bootstrap
+interval), Holm-adjusted over the two. Wrong answers alone would reward a
+system for abstaining; F1 falls when abstaining costs more right answers than
+it saves wrong ones, so the two together say whether "not sure" was worth it.
+It is printed first and named as the headline in every report (`primary` in the
+config). Everything else is secondary: the comparison table holds eighteen
 p-values, and among that many about one comes in under 0.05 by chance alone, so
-the fifteen besides the headline's are Holm-adjusted across the table and read
-as leads, not findings.
+the seventeen besides the headline's are Holm-adjusted across the table and read
+as leads, not findings. (The headline moved from consensus-mode `crossfact` to
+`crossfact-auto` when routing became the default, before any run.)
 
 **What we expect: Crossfact v2 will not reduce wrong answers much here.** When
 one model says "I don't know" and the other guesses, the comparator records the
@@ -129,11 +135,20 @@ on the two-way disagreements. That would be a fair baseline result, not a bug,
 and the case for v3's separate route for short factual questions. The "some
 participants abstained" table shows it directly.
 
+**What we expect from `crossfact-auto`: fewer wrong answers, and fewer right
+ones.** It answers a short fact only when two models give the same answer on
+their own, so a guess one model makes and the other doesn't share becomes "not
+sure". Whether that beats the best single model on F1 depends on how often the
+two models are right together; the "lost" column counts the right answers it
+gave up. Exact questions don't occur in SimpleQA; on them the route is right by
+construction (`bench/sets/exact.yaml`, 13 of 30 taken, all right, the rest left
+to the models; a test keeps it that way).
+
 ## Keeping it fair
 
 - **Same models.** Crossfact's two sides are two of the single baselines; its
-  judge is the third family. No fallback models: a fallback would make the
-  comparison unequal.
+  judge, which is also `crossfact-auto`'s third model, is the third family. No
+  fallback models: a fallback would make the comparison unequal.
 - **Shared answers.** The same model asked the same prompt is one call, cached:
   Crossfact's first answers *are* the single baselines' answers, so the paired
   comparison isolates what the pipeline adds.

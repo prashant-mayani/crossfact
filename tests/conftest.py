@@ -57,6 +57,10 @@ JUDGE_A = '{"rulings":[{"topic":"y","winner":"A","reason":"better sourced"}],"an
 def purpose_of(prompt: str) -> str:
     if "strict comparator" in prompt:
         return "compare"
+    if "Two short answers to the same question" in prompt:
+        return "same"
+    if "reply with exactly: ?" in prompt:
+        return "vote"
     if "neutral arbiter" in prompt:
         return "judge"
     if "Reconsider ONLY" in prompt:
@@ -96,7 +100,7 @@ class FakeLLM:
             if r["error"] is not None:
                 raise r["error"]() if callable(r["error"]) else r["error"]
             return r["reply"](prompt) if callable(r["reply"]) else r["reply"]
-        return {"compare": COMPARE_AGREE, "judge": JUDGE_A, "merge": "merged answer",
+        return {"compare": COMPARE_AGREE, "judge": JUDGE_A, "merge": "merged answer", "same": '{"same": false}',
                 "debate": f"revised by {pid}"}.get(purpose, f"answer from {pid}/{model}")
 
     def count(self, **match) -> int:

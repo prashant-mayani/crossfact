@@ -130,6 +130,8 @@ class Lifecycle:
                 mode = json.loads(row["pipeline_json"] or "{}").get("mode") or "unknown"
             except ValueError:
                 mode = "unknown"
+            if mode == "auto":  # the route it took is unknown: count it where it costs most, against the SLO
+                mode = "consensus"
             tm.ORPHANS.inc()
             tm.RUNS.labels(mode, "abandoned").inc()
             closed += 1

@@ -56,14 +56,37 @@ def test_full_ask_poll_render_loop(client, admin, llm):
     assert "<script>" not in page  # boot data is a JSON block, not inline script
 
 
-def test_auto_is_the_default_mode_and_says_when_one_model_answered(client, admin, llm):
+def test_auto_is_the_default_and_computes_exact_questions_at_no_cost(client, admin, llm):
+    from app import db
+
     page = client.get("/chat").text
     assert page.index('value="auto"') < page.index('value="consensus"')
-    llm.on(provider="alpha", purpose="answer", reply="[direct]\n5")
-    r = ask(client, admin, mode="auto")
+    r = ask(client, admin, question="What is 2+3?", mode="auto")
     d = wait_done(client, r.json()["message_id"])
-    assert d["pipeline"]["route"] == "direct" and d["content"] == "5"
-    assert "Answered by side A alone" in client.get(f"/chat/{r.json()['thread_id']}").text
+    assert d["pipeline"]["route"] == "exact" and d["content"] == "5" and llm.calls == []
+    assert db.usage_today(db.get_user(username="admin")["id"]) == 0  # no model asked, no quota used
+    page = client.get(f"/chat/{r.json()['thread_id']}").text
+    assert 'class="chip exact"' in page and "Computed in code, not by a model: 2 + 3 = 5" in page
+
+
+def test_exact_questions_are_answered_even_when_the_quota_is_used_up(client, admin, llm, monkeypatch):
+    from app import config
+
+    monkeypatch.setitem(config.cfg()["quotas"], "daily_runs", 1)
+    wait_done(client, ask(client, admin).json()["message_id"])
+    r = ask(client, admin, question="What is 2+3?", mode="auto")
+    assert r.status_code == 200 and wait_done(client, r.json()["message_id"])["content"] == "5"
+    assert ask(client, admin, question="What is x?", mode="auto").status_code == 429
+
+
+def test_a_short_fact_the_models_disagree_on_says_not_sure_and_what_each_said(client, admin, llm):
+    llm.on(provider="alpha", purpose="answer", reply="[fact]\nSydney")
+    llm.on(provider="beta", purpose="answer", reply="[fact]\nCanberra")
+    r = ask(client, admin, question="What is the capital of Australia?", mode="auto")
+    d = wait_done(client, r.json()["message_id"])
+    assert d["content"] == "Not sure." and d["pipeline"]["outcome"] == "unsure"
+    page = client.get(f"/chat/{r.json()['thread_id']}").text
+    assert 'class="chip unsure">not sure<' in page and "alpha/a1: Sydney · beta/b1: Canberra" in page
 
 
 def test_degraded_run_is_labelled_and_offers_retry(client, admin, llm):

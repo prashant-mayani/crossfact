@@ -306,46 +306,215 @@ def test_no_configured_judge_degrades_with_a_reason(llm, monkeypatch):
     assert any(e.get("kind") == "not_configured" for e in stages(out, "error"))
 
 
-def test_auto_lets_side_a_answer_a_calculation_alone(llm):
+# ---- mode "auto": the routes -------------------------------------------------------------
+
+def auto(question="What is the capital of Australia?", **kw):
+    from app.orchestrator import run_pipeline
+
+    return run_pipeline(question, "", A, B, "auto", None, **kw)
+
+
+def runs(mode, outcome):
     from prometheus_client import REGISTRY
 
-    from app.orchestrator import ROUTE_NOTE
-
-    seen = []
-    llm.on(provider="alpha", purpose="answer", reply=lambda p: (seen.append(p), "[direct]\n2 + 3 = 5")[1])
-    before = REGISTRY.get_sample_value("crossfact_runs_total", {"mode": "single", "outcome": "single"}) or 0
-    out = run(mode="auto")
-    assert out["outcome"] == "single" and out["route"] == "direct" and out["final"] == "2 + 3 = 5"
-    assert ROUTE_NOTE.strip() in seen[0]                      # side A was asked to route
-    assert llm.count(purpose="compare") == 0 and llm.count(purpose="debate") == 0
-    assert [s["side"] for s in stages(out, "answer")] == ["A"] and stages(out, "note")
-    after = REGISTRY.get_sample_value("crossfact_runs_total", {"mode": "single", "outcome": "single"})
-    assert after == before + 1                                 # counted as a single-model run
+    return REGISTRY.get_sample_value("crossfact_runs_total", {"mode": mode, "outcome": outcome}) or 0
 
 
-@pytest.mark.parametrize("reply", ["[direct]\n5", "[direct] 5", "**[direct]**\n5", "  [DIRECT]\n\n5"])
-def test_the_mark_is_found_however_side_a_writes_it(llm, reply):
-    llm.on(provider="alpha", purpose="answer", reply=reply)
-    out = run(mode="auto")
-    assert out["route"] == "direct" and out["final"] == "5"
+def test_auto_computes_exact_questions_in_code_without_any_model(llm):
+    before = runs("exact", "exact")
+    out = auto("What is 2+3?")
+    assert out["outcome"] == "exact" and out["route"] == "exact" and out["final"] == "5"
+    assert llm.calls == []                                      # no model was asked anything
+    assert stages(out, "exact")[0]["working"] == "2 + 3 = 5"
+    assert out["route_note"] == "Computed in code, not by a model: 2 + 3 = 5"
+    assert runs("exact", "exact") == before + 1                 # counted as its own route, not as consensus
+
+
+def test_the_exact_route_reads_the_question_not_the_instruction(llm):
+    """The benchmark adds "reply with only the answer" after every question."""
+    out = auto("What is 487 multiplied by 36?", instruction="Reply with only the answer.")
+    assert out["route"] == "exact" and out["final"] == "17532" and llm.calls == []
+
+
+def test_other_modes_never_compute_in_code(llm):
+    from app.orchestrator import run_pipeline
+
+    out = run_pipeline("What is 2+3?", "", A, B, "consensus", None)
+    assert out["outcome"] == "agreed" and out["route"] is None and llm.count(purpose="answer") == 2
+
+
+def test_a_short_fact_both_models_give_is_the_answer_with_no_comparison_or_debate(llm):
+    from app.orchestrator import FACT_NOTE
+
+    llm.on(provider="alpha", purpose="answer", reply="[fact]\nCanberra")
+    llm.on(provider="beta", purpose="answer", reply="[fact]\nCanberra.")
+    before = runs("fact", "agreed")
+    out = auto()
+    assert out["outcome"] == "agreed" and out["route"] == "fact" and out["final"] == "Canberra"
+    assert sum(FACT_NOTE.strip() in p for p in llm.prompts) == 2     # both sides got the routing note
+    assert [c["purpose"] for c in llm.calls] == ["answer", "answer"]  # nothing else: no compare, debate, merge
+    assert [s["text"] for s in stages(out, "answer")] == ["Canberra", "Canberra."]  # the mark isn't shown
+    assert out["route_note"] == "Short fact: alpha/a1 and beta/b1 each gave this answer on their own."
+    assert stages(out, "fact")[0]["answers"] == [{"model": "alpha/a1", "answer": "Canberra"},
+                                                 {"model": "beta/b1", "answer": "Canberra."}]
+    assert runs("fact", "agreed") == before + 1
+
+
+@pytest.mark.parametrize("reply", ["[fact]\nCanberra", "[fact] Canberra", "**[fact]**\n\nCanberra",
+                                   "  [FACT]\nCanberra\nIt became the capital in 1913.",
+                                   "<think>easy</think>[fact]\nCanberra"])
+def test_the_mark_is_found_however_a_model_writes_it(llm, reply):
+    llm.on(purpose="answer", reply=reply)
+    out = auto()
+    assert out["route"] == "fact" and out["final"] == "Canberra"
 
 
 def test_the_mark_only_counts_at_the_start(llm):
-    llm.on(provider="alpha", purpose="answer", reply="It depends. Some would answer [direct] here.")
-    assert run(mode="auto")["route"] == "consensus"
-
-def test_auto_runs_the_full_consensus_when_side_a_does_not_answer_alone(llm):
-    from app.orchestrator import ROUTE_NOTE
-
-    out = run(mode="auto")
-    assert out["outcome"] == "agreed" and out["route"] == "consensus" and llm.count(purpose="compare") == 1
-    assert sum(ROUTE_NOTE.strip() in p for p in llm.prompts) == 1   # side A only, never side B
+    llm.on(purpose="answer", reply="It depends. Some would write [fact] here.")
+    assert auto()["route"] == "consensus"
 
 
-def test_consensus_mode_never_takes_the_fast_path(llm):
-    from app.orchestrator import ROUTE_NOTE
+def test_answers_worded_differently_get_one_check_and_the_answer_claims_no_more_than_both(llm):
+    llm.on(provider="alpha", purpose="answer", reply="[fact]\nCanberra, Australia")
+    llm.on(provider="beta", purpose="answer", reply="[fact]\nCanberra")
+    llm.on(purpose="same", reply='{"same": true}')
+    out = auto()
+    assert out["outcome"] == "agreed" and out["final"] == "Canberra" and llm.count(purpose="same") == 1
 
-    llm.on(provider="alpha", purpose="answer", reply="[direct]\n5")
-    out = run()
-    assert out["route"] is None and out["outcome"] == "agreed"
-    assert not any(ROUTE_NOTE.strip() in p for p in llm.prompts)
+
+@pytest.mark.parametrize(("a", "b", "outcome"), [("1,048,576", "1048576", "agreed"), ("2.50", "2.5", "agreed"),
+                                                 ("42", "41", "unsure")])
+def test_numbers_are_compared_as_numbers_without_a_model(llm, a, b, outcome):
+    llm.on(provider="alpha", purpose="answer", reply=f"[fact]\n{a}")
+    llm.on(provider="beta", purpose="answer", reply=f"[fact]\n{b}")
+    out = auto("How many?")
+    assert out["outcome"] == outcome and llm.count(purpose="same") == 0 and llm.count(purpose="vote") == 0
+
+
+def test_two_different_answers_are_not_sure_and_say_what_each_model_said(llm):
+    llm.on(provider="alpha", purpose="answer", reply="[fact]\nSydney")
+    llm.on(provider="beta", purpose="answer", reply="[fact]\nCanberra")
+    llm.on(purpose="same", reply='{"same": false}')
+    before = runs("fact", "unsure")
+    out = auto()
+    assert out["outcome"] == "unsure" and out["final"] == "Not sure." and out["degraded"] == []
+    assert out["route_note"] == "alpha/a1: Sydney · beta/b1: Canberra. No source settled it."
+    # by the 2-of-3 rule a third model couldn't settle two different answers, so none is asked
+    assert llm.count(purpose="vote") == 0 and llm.count(purpose="judge") == 0
+    assert runs("fact", "unsure") == before + 1
+
+
+def test_a_model_that_is_not_sure_brings_in_a_third_whose_agreement_counts(llm):
+    llm.on(provider="alpha", purpose="answer", reply="[fact]\nCanberra")
+    llm.on(provider="beta", purpose="answer", reply="[fact]\n?")
+    llm.on(provider="judge", purpose="vote", reply="Canberra")
+    out = auto()
+    assert out["outcome"] == "majority" and out["final"] == "Canberra"
+    third = [s for s in stages(out, "answer") if s["side"] == "C"][0]
+    assert (third["provider"], third["text"]) == ("judge", "Canberra")
+    vote_prompt = next(p for p in llm.prompts if "reply with exactly: ?" in p)
+    assert "Canberra" not in vote_prompt and "[fact]" not in vote_prompt  # it answers on its own
+    assert out["route_note"] == ("Short fact: alpha/a1 and judge/j1 each gave this answer on their own; "
+                                 "beta/b1 wasn't sure.")
+
+
+@pytest.mark.parametrize("third", ["Sydney", "?", "I don't know"])
+def test_a_third_model_that_does_not_agree_leaves_it_not_sure(llm, third):
+    llm.on(provider="alpha", purpose="answer", reply="[fact]\nCanberra")
+    llm.on(provider="beta", purpose="answer", reply="[fact]\nI don't know")
+    llm.on(provider="judge", purpose="vote", reply=third)
+    llm.on(purpose="same", reply='{"same": false}')
+    out = auto()
+    assert out["outcome"] == "unsure" and out["final"] == "Not sure."
+
+
+def test_when_no_model_is_sure_nothing_more_is_asked(llm):
+    llm.on(purpose="answer", reply="[fact]\n?")
+    out = auto()
+    assert out["outcome"] == "unsure" and out["final"] == "Not sure."
+    assert out["route_note"] == "alpha/a1: not sure · beta/b1: not sure."
+    assert [c["purpose"] for c in llm.calls] == ["answer", "answer"]
+
+
+def test_a_failed_side_is_covered_by_the_third_model(llm):
+    llm.on(provider="beta", error=ProviderError("401", ErrorKind.AUTH))
+    llm.on(provider="alpha", purpose="answer", reply="[fact]\nCanberra")
+    llm.on(provider="judge", purpose="vote", reply="Canberra")
+    out = auto()
+    assert out["outcome"] == "agreed" and out["final"] == "Canberra" and out["degraded"] == []
+    assert stages(out, "error")[0]["side"] == "B"
+    assert "(beta/b1 failed)" in out["route_note"]
+
+
+def test_a_failed_side_with_no_third_model_is_degraded_not_passed_off_as_checked(llm):
+    llm.on(provider="beta", error=ProviderError("401", ErrorKind.AUTH))
+    llm.on(provider="judge", error=ProviderError("401", ErrorKind.AUTH))
+    llm.on(provider="alpha", purpose="answer", reply="[fact]\nCanberra")
+    out = auto()
+    assert out["outcome"] == "degraded" and out["degraded"] == ["side_b_failed"] and out["final"] == "Canberra"
+
+
+def test_a_failed_same_answer_check_shows_both_answers(llm):
+    llm.on(provider="alpha", purpose="answer", reply="[fact]\nCanberra, ACT")
+    llm.on(provider="beta", purpose="answer", reply="[fact]\nCanberra")
+    llm.on(purpose="same", error=ProviderError("boom", ErrorKind.SERVER))
+    out = auto()
+    assert out["outcome"] == "degraded" and out["degraded"] == ["comparator_failed"]
+    assert out["final"] == "alpha/a1: Canberra, ACT\nbeta/b1: Canberra"
+
+
+def test_one_short_answer_and_one_full_answer_run_the_consensus(llm):
+    llm.on(provider="alpha", purpose="answer", reply="[fact]\nCanberra")
+    llm.on(provider="beta", purpose="answer", reply="The capital of Australia is Canberra, since 1913.")
+    out = auto()
+    assert out["route"] == "consensus" and out["outcome"] == "agreed" and llm.count(purpose="compare") == 1
+    compare = next(p for p in llm.prompts if "strict comparator" in p)
+    assert "ANSWER A:\nCanberra\n" in compare and "[fact]" not in compare
+
+
+def test_unmarked_answers_run_the_full_consensus(llm):
+    out = auto("Should I learn Rust or Go first?")
+    assert out["route"] == "consensus" and out["outcome"] == "agreed" and llm.count(purpose="compare") == 1
+
+
+def test_a_slow_side_gets_seconds_not_minutes_once_the_other_gave_a_short_fact(llm, monkeypatch):
+    import threading
+    import time
+
+    import app.orchestrator as orch
+
+    release = threading.Event()
+    real_setting = orch.pipeline_setting
+    monkeypatch.setattr(orch, "pipeline_setting",
+                        lambda key, default: 0.3 if key == "fact_grace_s" else real_setting(key, default))
+    monkeypatch.setattr(orch, "POLL_S", 0.01)
+    llm.on(provider="alpha", purpose="answer", reply="[fact]\nCanberra")
+    llm.on(provider="beta", purpose="answer", reply=lambda prompt: (release.wait(10), "[fact]\nCanberra")[1])
+    llm.on(provider="judge", purpose="vote", reply="Canberra")
+    t0 = time.monotonic()
+    try:
+        out = auto()  # straggler_grace_s is 150 s; the short fact waits 0.3 s
+    finally:
+        release.set()
+        _join_stragglers()
+    assert time.monotonic() - t0 < 5
+    assert out["outcome"] == "agreed" and stages(out, "error")[0]["straggler"] is True
+
+
+def test_short_fact_helpers():
+    from app.orchestrator import _fact_answer, _key, _unsure
+
+    assert _fact_answer("[fact]\n") == "?" and _fact_answer("Canberra") is None
+    assert _key("The Beatles.") == _key("beatles") and _key("Zürich") == _key("Zurich")
+    assert _key("北京") != _key("上海")  # accents go, other scripts stay
+    assert all(_unsure(x) for x in ("?", " ?? ", "I don't know.", "Not sure", "unknown", ""))
+    assert not any(_unsure(x) for x in ("Canberra", "0", "No"))
+
+
+def test_a_failed_check_of_the_third_models_answer_is_degraded_not_a_verdict(llm):
+    llm.on(provider="alpha", purpose="answer", reply="[fact]\nCanberra")
+    llm.on(provider="beta", purpose="answer", reply="[fact]\n?")
+    llm.on(provider="judge", purpose="vote", reply="Canberra, ACT")
+    llm.on(purpose="same", error=ProviderError("boom", ErrorKind.SERVER))
+    out = auto()
+    assert out["outcome"] == "degraded" and out["degraded"] == ["comparator_failed"] and out["final"] == "Not sure."

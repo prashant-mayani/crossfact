@@ -15,7 +15,9 @@ instruction: give only the answer, or say "I don't know" when not confident.
              to beat (Zhang et al., 2025)
   moa        Mixture-of-Agents, one layer: several models answer, an aggregator
              reads them all and writes the final answer (Wang et al., 2024)
-  crossfact  the app's own pipeline (consensus mode), through the same call path.
+  crossfact  the app's own pipeline, through the same call path: consensus mode,
+             or with "mode: auto" the routed one (exact questions computed in
+             code, short facts checked by two models, the rest by consensus).
              A run in which a provider call failed (a timeout, a server error)
              is not scored: like a baseline's failed call, it is recorded as an
              error and tried again on a later run, with the calls that succeeded
@@ -167,8 +169,10 @@ class Crossfact(System):
         real = orchestrator.ask
         orchestrator.ask = self.calls.ask
         try:
-            out = orchestrator.run_pipeline(PROMPT.format(question=question, instruction=self.instruction), "",
-                                            side_a, side_b, self.spec.get("mode", "consensus"))
+            # The question and the instruction travel apart (the models see them joined, as
+            # PROMPT joins them) so that mode "auto" routes on the question alone.
+            out = orchestrator.run_pipeline(question, "", side_a, side_b, self.spec.get("mode", "consensus"),
+                                            instruction=self.instruction)
         finally:
             orchestrator.ask = real
         errors = [s for s in out["stages"] if s["stage"] == "error"]

@@ -75,6 +75,7 @@ providers:
 pipeline:
   run_deadline_s: 1800
   straggler_grace_s: 900
+  fact_grace_s: 900
   utility: {provider: gemini, model: gemini-3.5-flash-lite, effort: "off"}
   utility_fallbacks: []
   judge: {provider: groq, model: qwen/qwen3.8-27b, effort: high}
@@ -98,9 +99,19 @@ systems:
     models: [groq/openai/gpt-oss-120b, gemini/gemini-3.5-flash-lite, groq/qwen/qwen3.8-27b]
     aggregator: groq/openai/gpt-oss-120b
   - {name: crossfact, kind: crossfact, side_a: groq/openai/gpt-oss-120b, side_b: gemini/gemini-3.5-flash-lite}
+  # Crossfact as the app runs it by default (mode auto): exact questions computed in
+  # code, a short fact answered only when two models give it on their own (Qwen, the
+  # judge, is the third model, and its agreement counts only beside a "not sure"),
+  # everything else by the consensus above.
+  - name: crossfact-auto
+    kind: crossfact
+    mode: auto
+    side_a: groq/openai/gpt-oss-120b
+    side_b: gemini/gemini-3.5-flash-lite
 
-# The headline, fixed before the run: Crossfact against the best single model by F1,
-# on wrong answers and on F1 (Holm-adjusted over the two). Every other comparison
-# in the report is secondary and Holm-adjusted across the table.
-primary: {system: crossfact}
+# The headline, fixed before the run: Crossfact as the app runs it (crossfact-auto)
+# against the best single model by F1, on wrong answers and on F1 (Holm-adjusted
+# over the two). Every other comparison in the report is secondary and
+# Holm-adjusted across the table.
+primary: {system: crossfact-auto}
 reference: best_single   # the best single model by F1 (or name a system)

@@ -57,6 +57,15 @@ def model_reply(pid):
             gold = re.search(r"Gold target: (.*)", prompt).group(1).strip().lower()
             pred = re.search(r"Predicted answer: (.*)", prompt).group(1).strip().lower()
             return "A" if gold.split()[-1] in pred else ("C" if "know" in pred else "B")
+        if "(Routing note" in prompt:  # mode "auto": every question here has one short answer
+            topic = _topic(prompt.split("(Routing note")[0])
+            known = KNOWS[pid][topic] if topic else "I don't know"
+            return f"[fact]\n{'?' if 'know' in known else known}"
+        if "Two short answers to the same question" in prompt:
+            x, y = (re.search(rf"ANSWER {i}: (.*)", prompt).group(1) for i in (1, 2))
+            return json.dumps({"same": _same(x, y)})
+        if "reply with exactly: ?" in prompt:  # a third model, asked on its own: it knows
+            return TRUTH.get(_topic(prompt), "?")
         if "strict comparator" in prompt:
             a, b = (x.strip() for x in re.search(r"ANSWER A:\n(.*?)\n\nANSWER B:\n(.*)$", prompt, re.S).groups())
             if _same(a, b):
@@ -194,6 +203,20 @@ def test_crossfact_runs_the_real_pipeline(bench_env):
     from app.providers import ask
 
     assert orchestrator.ask is ask  # the harness put the app's call function back
+
+
+def test_crossfact_auto_computes_what_it_can_and_says_not_sure_when_the_models_split(bench_env):
+    routed = {"name": "crossfact-auto", "kind": "crossfact", "mode": "auto", "side_a": "alpha/a1",
+              "side_b": "beta/b1"}
+    run_id, _ = go(bench_env, bench_env["write"](systems=[SYSTEMS[0], routed]))
+    got = answers_of(bench_env, run_id, "crossfact-auto")
+    assert {q: a["detail"]["outcome"] for q, a in got.items()} == {
+        "1": "agreed", "2": "unsure", "3": "unsure", "4": "exact"}
+    assert got["4"]["answer"] == "17532" and got["4"]["calls"] == 0  # computed in code: no model call
+    assert got["2"]["answer"] == "Not sure."
+    assert got["2"]["detail"]["participants"] == {"A:alpha/a1": "Sydney", "B:beta/b1": "Canberra"}
+    # Sydney/Canberra and Shakespeare/Marlowe split the two models: "not sure", never a guess
+    assert counts(results(bench_env, run_id))["crossfact-auto"] == (2, 0, 2)
 
 
 def test_a_second_run_costs_no_calls_and_gives_the_same_numbers(bench_env):

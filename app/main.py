@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import auth, db, evalmetrics, faults, orchestrator, providers
+from . import auth, db, evalmetrics, exact, faults, orchestrator, providers
 from . import telemetry as tm
 from .config import VERSION, cfg, pipeline_setting
 from .lifecycle import INSTANCE_ID, LIFECYCLE
@@ -29,7 +29,7 @@ from .providers import EFFORTS, enabled_providers, health
 
 log = logging.getLogger("crossfact")
 BASE = os.path.dirname(__file__)
-MODES = ("auto", "consensus", "union", "single")  # auto: consensus, unless side A answers alone (orchestrator)
+MODES = ("auto", "consensus", "union", "single")  # auto: a route per question (orchestrator)
 DRAINING_MSG = "Crossfact is restarting for an update. Your question wasn't sent; try again in a minute."
 
 CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; "
@@ -279,7 +279,7 @@ def _start_job(mid: str, uid: str, question: str, history: str, side_a: dict, si
         try:
             out = run_pipeline(question, history, side_a, side_b, mode, file_paths, progress)
             record = {"stages": out["stages"], "outcome": out["outcome"], "degraded": out["degraded"],
-                      "route": out.get("route"),
+                      "route": out.get("route"), "route_note": out.get("route_note"),
                       "duration_s": out["duration_s"], "sides": {"A": side_a, "B": side_b}, "mode": mode,
                       "files": [os.path.basename(p) for p in file_paths]}
             status = "error" if out["outcome"] == "error" else "done"
@@ -310,11 +310,12 @@ def ask_route(request: Request,
         raise HTTPException(400, "bad mode or effort")
     if mode != "single" and not (b_provider and b_model):
         raise HTTPException(400, "side B is required for consensus and union modes")
-    if db.usage_today(s["user_id"]) >= daily_quota():
-        raise HTTPException(429, "Daily run quota reached. It resets at midnight.")
     question = question.strip()[:20000]
     if not question:
         raise HTTPException(400, "empty question")
+    free = mode == "auto" and exact.solve(question) is not None  # computed in code: no model, no quota
+    if not free and db.usage_today(s["user_id"]) >= daily_quota():
+        raise HTTPException(429, "Daily run quota reached. It resets at midnight.")
     if thread_id and not db.get_thread(thread_id, s["user_id"]):
         raise HTTPException(404)
     tid = thread_id or db.create_thread(s["user_id"], question[:80])
@@ -333,13 +334,15 @@ def ask_route(request: Request,
     if not LIFECYCLE.begin(mid):  # a drain started since the check above: refuse, uncounted
         db.update_message(mid, content=DRAINING_MSG, status="error")
         raise HTTPException(503, DRAINING_MSG)
-    db.bump_usage(s["user_id"])
+    if not free:
+        db.bump_usage(s["user_id"])
     try:
         _start_job(mid, s["user_id"], question, history, side_a, side_b, mode, paths)
     except BaseException:  # the run never started: don't leave a drain waiting on it
         LIFECYCLE.end(mid)
         db.update_message(mid, content="The run could not start. Try again.", status="error")
-        db.refund_usage(s["user_id"])
+        if not free:
+            db.refund_usage(s["user_id"])
         raise
     return JSONResponse({"thread_id": tid, "message_id": mid})
 

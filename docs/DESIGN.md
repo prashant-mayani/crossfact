@@ -43,19 +43,57 @@ question ─┬─▶ side A answers ─┐
 - **The answer is a union, not a vote**: everything both agreed on, each side's
   unique points, and the judge's rulings, merged by the utility model.
 
-Modes: `auto` (the default: the above, with a fast path), `consensus` (the
-above), `union` (no debate or judge; conflicts are shown side by side),
+Modes: `auto` (the default: a route per question, below), `consensus` (the
+above, always), `union` (no debate or judge; conflicts are shown side by side),
 `single` (one model, labelled as such).
 
-**The fast path in `auto`.** A calculation or a simple, settled fact gains
-nothing from a second model, a comparison or a debate, and waiting for them cost
-17 s for "what is 2+3" (Claude had answered in 4). So in `auto` side A's prompt
-asks it to mark exactly those (first line `[direct]`); recent or changing facts,
-opinions, advice and anything it is unsure of are left unmarked. A marked answer
-ends the run at once: side A's answer, labelled "not cross-checked", with no
-wait for side B (its call finishes in the background and is dropped). Unmarked
-questions run the full consensus. Metrics count marked runs as `single` and the
-rest as `consensus`, so the consensus SLO still measures consensus runs.
+### Routes in `auto`
+
+Not every question needs a debate. Waiting for one cost 17 s for "what is 2+3",
+and on a short fact a debate can't do what matters most, which is to not commit
+to a guess. So `auto` picks one of three routes:
+
+| route | for | what happens | model calls |
+|---|---|---|---|
+| exact | arithmetic, unit conversions, date arithmetic | computed in code and cached (`app/exact.py`) | 0 |
+| short fact | one short answer that doesn't change over time | two models answer on their own; see below | 2 to 4 |
+| consensus | everything else | the full pipeline above | 4 to 14 |
+
+**Exact.** Rational arithmetic, unit definitions that are exact by law (an inch
+is 2.54 cm), and the Gregorian calendar: the same answer, at once, every time,
+with the working shown, and no quota used. The parser takes a question only if
+the whole of it reads as a calculation; "9/11", "24/7", phone numbers, "0x10",
+0^0, a "ton" or a "calorie", 03/04/2026 and anything relative to today go to
+the models instead, because a wrong capture would be a wrong answer. On the
+bundled exact set (`bench/sets/exact.yaml`, 30 questions written for the
+models) it takes 13 and gets all 13 right; a test keeps it that way.
+
+**Short fact.** Both sides get the question with a routing note: if it has one
+short answer that doesn't change over time, reply `[fact]` and the answer, or
+`?` if not sure. Then:
+
+- both marked it and give the same answer (by text, by value, or else by one
+  utility-model check): that is the answer, `agreed`;
+- they give different answers: `unsure`, shown as "not sure" with what each
+  said. A third model isn't asked, because of the rule below;
+- one says `?` (or fails) and the other answers: a third model (the judge's,
+  a family that didn't answer) answers on its own, without seeing the others.
+  If it gives the same answer, that is the answer (`majority`, "2 of 3", or
+  `agreed` when the other side had failed); otherwise `unsure`;
+- neither is sure: `unsure`, with nothing more asked.
+
+The rule: **a 2-of-3 vote counts only when the dissenting model said "?"**. Two
+models against a third that gave a different answer is a dispute to settle with
+evidence (the search step, still to come), not a vote. Once one side has
+answered with the mark, the other gets `fact_grace_s` (30 s), not minutes; a
+side that misses it is covered by the third model. If only one side marks the
+question, the two answers go to the consensus route: unsure means consensus. A
+fact that can change over time (who holds an office, a price, the latest
+version) is left unmarked on purpose, so it goes to consensus too, until search
+exists to check it.
+
+Metrics and traces count a run by the route it took (`mode` is `exact`, `fact`
+or `consensus`), so the consensus SLO still measures consensus runs only.
 
 ### Outcomes say exactly what you got
 
@@ -66,6 +104,9 @@ rest as `consensus`, so the consensus SLO still measures consensus runs.
 | `judged` | conflicts settled by the judge |
 | `union` | union mode result |
 | `single` | single mode, as asked |
+| `exact` | computed in code (mode `auto`): no model was asked |
+| `majority` | a short fact one model and a third gave, while the other said "not sure" (shown as "2 of 3") |
+| `unsure` | a short fact the models didn't agree on: the answer is "Not sure.", and the note says what each said |
 | `degraded` | an answer, but less than asked for; the reason is shown (below) |
 | `error` | no answer (both sides failed); the daily quota is refunded |
 | `abandoned` | the pod running it died; refunded, the UI offers Retry |

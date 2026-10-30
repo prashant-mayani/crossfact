@@ -587,8 +587,9 @@ def prime_metrics() -> None:
     enabled = enabled_providers()
     combos = {(pid, m["id"], purpose) for pid, p in enabled.items() for m in p.get("models", [])
               for purpose in ("answer", "debate")}
-    for key, purposes in (("utility", ("compare", "merge")), ("utility_fallbacks", ("compare", "merge")),
-                          ("judge", ("judge",)), ("judge_fallbacks", ("judge",))):
+    utility, judge = ("compare", "merge", "same"), ("judge", "vote")
+    for key, purposes in (("utility", utility), ("utility_fallbacks", utility),
+                          ("judge", judge), ("judge_fallbacks", judge)):
         entries = pipe.get(key) or []
         for e in [entries] if isinstance(entries, dict) else entries:
             if e.get("provider") in enabled:

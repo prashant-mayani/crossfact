@@ -18,7 +18,7 @@ from prometheus_client import REGISTRY, Counter, Gauge, Histogram, Info, start_h
 
 log = logging.getLogger("crossfact.telemetry")
 
-RUN_BUCKETS = (15, 30, 60, 90, 120, 180, 240, 300, 420, 600, 900)
+RUN_BUCKETS = (0.5, 2, 5, 10, 15, 30, 60, 90, 120, 180, 240, 300, 420, 600, 900)
 CALL_BUCKETS = (1, 2.5, 5, 10, 20, 30, 60, 90, 120, 180, 300, 420)
 HTTP_BUCKETS = (0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)
 

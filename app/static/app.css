@@ -156,7 +156,7 @@ table.users th, table.users td { text-align: left; padding: .45rem .4rem;
 }
 
 /* ---- v2: failure states are first-class, never disguised as consensus ---- */
-:root { --degraded: #c9a35a; --fault: #e35d7a; }
+:root { --degraded: #c9a35a; --fault: #e35d7a; --exact: #a99cf0; --unsure: #e38a4c; }
 .verdictbar.degraded { background: linear-gradient(90deg, var(--a) 0%, var(--b) 30%, var(--dim) 75%); opacity: 1;
   background-size: 100% 100%; }
 .verdictbar.degraded::after { content: ''; }
@@ -169,6 +169,20 @@ table.users th, table.users td { text-align: left; padding: .45rem .4rem;
 .banner { margin: .2rem 0 .5rem; padding: .45rem .6rem; border-left: 3px solid var(--degraded);
   background: rgba(201, 163, 90, .08); color: #e9dcc0; font-size: .9rem; border-radius: 0 6px 6px 0; }
 .banner.routed { border-left-color: var(--dim); background: rgba(147, 161, 173, .08); color: var(--dim); }
+/* v3 routes: computed in code, a short fact two models agree on, or an honest "not sure" */
+.banner.routed.exact { border-left-color: var(--exact); }
+.banner.routed.agreed, .banner.routed.majority { border-left-color: var(--ok); }
+.banner.routed.unsure { border-left-color: var(--unsure); background: rgba(227, 138, 76, .08); color: #ecd2bf; }
+.verdictbar.exact { background: var(--exact); opacity: 1; }
+.verdictbar.majority { background: linear-gradient(90deg, var(--a) 0%, var(--b) 30%, var(--ok) 70%, var(--ok));
+  opacity: .85; }
+.verdictbar.unsure { background: repeating-linear-gradient(90deg, var(--unsure) 0 14px, transparent 14px 18px);
+  opacity: .9; }
+.chip.exact { color: var(--exact); border-color: var(--exact); }
+.chip.majority { color: var(--ok); border-color: var(--ok); }
+.chip.unsure { color: var(--unsure); border-color: var(--unsure); }
+.stage.exact { border-color: var(--exact); }
+.stage.fact { border-color: var(--ok); }
 button.retry { margin-top: .5rem; background: none; color: var(--focus); border: 1px solid var(--line);
   border-radius: 6px; padding: .3rem .8rem; cursor: pointer; font: inherit; font-size: .85rem; }
 button.retry:disabled { opacity: .5; }

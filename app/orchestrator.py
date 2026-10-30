@@ -9,18 +9,27 @@
   judge      anonymized ruling per remaining conflict; may say "unverified"
   merge      union = agreements + unique_a + unique_b (+ rulings)
 
-Mode "auto" (the default) adds a fast path: side A's prompt asks it to mark a
-calculation or a simple, settled fact with one correct answer. When side A
-answers with that mark, the run ends there: side A's answer, labelled as not
-cross-checked, with no waiting for side B, no comparison and no debate. Anything
-else runs the full consensus with both answers, as mode "consensus" does.
+Mode "auto" (the default) sends each question down the route that suits it:
+
+  exact       arithmetic, unit conversions and date arithmetic are computed in
+              code (app/exact.py) and cached: no model call, the same answer at
+              once, every time
+  short fact  both sides answer with the same routing note; when both mark the
+              question as one short answer that doesn't change over time, two
+              answers that agree are the answer. A side that says "?" (not sure)
+              or fails brings in a third model, which answers on its own; its
+              agreement counts only beside a "?" or a failure, never against a
+              different answer. Anything else is "not sure", with what each model
+              said. No comparison call, no debate.
+  consensus   everything else: the full pipeline above, as in mode "consensus"
 
 Everything runs inside one time budget (pipeline.run_deadline_s). When a step
 fails or the budget runs short, the run still finishes, but it is labelled
 "degraded" with the reason, never passed off as a consensus.
 
-Outcomes: agreed | debated | judged | union | single | degraded | error
-(plus "abandoned", which lifecycle.py assigns to runs a dead pod left behind).
+Outcomes: agreed | debated | judged | union | single | exact | majority | unsure |
+degraded | error (plus "abandoned", which lifecycle.py assigns to runs a dead pod
+left behind).
 """
 from __future__ import annotations
 
@@ -30,29 +39,53 @@ import json
 import random
 import re
 import time
+import unicodedata
+from fractions import Fraction
 
+from . import exact
 from . import telemetry as tm
 from .config import pipeline_setting, registry
 from .providers import ask, configured
 from .resilience import Deadline, ErrorKind, ProviderError
 
-SUCCESS = {"agreed", "debated", "judged", "union", "single"}
-# Every outcome a run of each mode can end with ("abandoned": its pod died; lifecycle.py).
+SUCCESS = {"agreed", "debated", "judged", "union", "single", "exact", "majority", "unsure"}
+# Every outcome a run can end with, by what ran: a mode, or the route mode "auto" chose
+# ("abandoned": its pod died; lifecycle.py counts an "auto" run it closes as consensus).
 OUTCOMES_BY_MODE = {
     "single": ("single", "error", "abandoned"),
     "union": ("union", "degraded", "error", "abandoned"),
     "consensus": ("agreed", "debated", "judged", "degraded", "error", "abandoned"),
+    "exact": ("exact",),
+    "fact": ("agreed", "majority", "unsure", "degraded"),
 }
-# Mode "auto": side A marks what needs no second opinion (see the module docstring).
-DIRECT_MARK = "[direct]"
-ROUTE_NOTE = f"""
+# Mode "auto": both sides get this note, and mark a short, settled fact (module docstring).
+FACT_MARK = "[fact]"
+FACT_NOTE = f"""
 
-(Routing note, not part of the question. If the question is a calculation, or asks
-for a simple, settled fact with exactly one correct answer that you are certain of,
-make the first line of your reply exactly {DIRECT_MARK} and then answer. For
-anything else, such as recent or changing facts, opinions, advice, comparisons,
-explanations, or anything you are less than certain about, answer normally without
-that line.)"""
+(Routing note, not part of the question. If the question has one short correct
+answer, such as a name, a date, a place, a number or the result of a calculation,
+and that answer does not change over time, reply in exactly two lines: the first
+is {FACT_MARK}, the second only the answer, in a few words, with no explanation.
+If you are not sure of the answer, put ? on the second line instead of guessing.
+For anything else, including facts that can change (who holds a role now, prices,
+the latest version of something, records, populations), answer normally, without
+the {FACT_MARK} line.)"""
+
+VOTE_PROMPT = """{question}
+
+Reply with only the answer, in a few words, with no explanation. If you are not
+sure of the answer, reply with exactly: ?"""
+
+SAME_PROMPT = """Two short answers to the same question follow. Do they give the same answer:
+the same person, place, thing, date or quantity, perhaps worded differently or one
+more precisely than the other, without contradicting each other? Respond with ONLY
+a JSON object, {{"same": true}} or {{"same": false}}.
+
+QUESTION:
+{question}
+
+ANSWER 1: {x}
+ANSWER 2: {y}"""
 
 DEGRADE_REASONS = ("side_a_failed", "side_b_failed", "comparator_failed", "merge_failed", "judge_failed",
                    "deadline")
@@ -186,14 +219,14 @@ def _future(f: cf.Future):
 POLL_S = 0.25
 
 
-def _gather(futures: dict[str, cf.Future], grace_s: float, stop_when=None) -> dict[str, tuple]:
+def _gather(futures: dict[str, cf.Future], grace_s: float, grace_for=None) -> dict[str, tuple]:
     """Wait for both sides, but once one has answered, give the other at most
     grace_s more. A side cut off this way comes back as a TIMEOUT marked
     straggler; its call keeps running in the background until its own timeout
     (bounded by the run deadline) and its result is dropped.
 
-    stop_when(side, (result, error)) -> True ends the wait at once (mode "auto":
-    side A answered on its own); the sides still pending are simply left out.
+    grace_for(side, (result, error)) -> seconds sets the grace from the first
+    answer instead (mode "auto": a short fact is worth seconds of waiting, not minutes).
 
     Without this, one hung provider makes every user wait out its full timeout
     (game day "claude-hangs": 300-600 s for an answer the other model gave in 25 s).
@@ -210,8 +243,8 @@ def _gather(futures: dict[str, cf.Future], grace_s: float, stop_when=None) -> di
                 del pending[side]
                 if out[side][0] is not None and first_ok_at is None:
                     first_ok_at = time.monotonic()
-                if stop_when and stop_when(side, out[side]):
-                    return out
+                    if grace_for:
+                        grace_s = grace_for(side, out[side])
         if not pending:
             break
         if first_ok_at is not None and time.monotonic() - first_ok_at >= grace_s:
@@ -225,31 +258,184 @@ def _gather(futures: dict[str, cf.Future], grace_s: float, stop_when=None) -> di
     return out
 
 
-def _both(fn_a, fn_b, grace_s: float, stop_when=None) -> dict[str, tuple]:
+def _both(fn_a, fn_b, grace_s: float, grace_for=None) -> dict[str, tuple]:
     """Run two calls in parallel; return {"A": (result, error), "B": (...)}.
     The executor is not joined: a straggler must not hold the run open."""
     ex = cf.ThreadPoolExecutor(max_workers=2, thread_name_prefix="side")
     try:
-        return _gather({"A": ex.submit(fn_a), "B": ex.submit(fn_b)}, grace_s, stop_when)
+        return _gather({"A": ex.submit(fn_a), "B": ex.submit(fn_b)}, grace_s, grace_for)
     finally:
         ex.shutdown(wait=False)
 
 
-# The mark at the very start, alone on its line or not, bare or in markdown (**[direct]**).
-_DIRECT_RE = re.compile(r"\A\s*[*_`]*" + re.escape(DIRECT_MARK) + r"[*_`]*[ \t]*\n?", re.IGNORECASE)
+# ---- short facts (mode "auto") ---------------------------------------------------
+
+# The mark at the very start, alone on its line or not, bare or in markdown (**[fact]**).
+_FACT_RE = re.compile(r"\A\s*[*_`]*" + re.escape(FACT_MARK) + r"[*_`]*[ \t]*", re.IGNORECASE)
+_THINK_RE = re.compile(r"<think>.*?</think>", re.S)
+_UNSURE_RE = re.compile(r"^(?:i (?:do not|don't|dont) know|not sure|unsure|unknown|no idea|"
+                        r"i'?m not (?:sure|certain)|i am not (?:sure|certain)|(?:it )?cannot be determined)$")
+_NUMBER_RE = re.compile(r"^[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
 
 
-def _is_direct(text: str) -> bool:
-    return bool(_DIRECT_RE.match(text or ""))
+def _first_line(text: str) -> str:
+    rest = _THINK_RE.sub("", text or "")
+    line = next((ln for ln in rest.splitlines() if ln.strip()), "")
+    return line.strip().strip("*_`").strip()
 
 
-def _strip_direct(text: str) -> str:
-    return _DIRECT_RE.sub("", text or "", count=1).lstrip()
+def _fact_answer(text: str) -> str | None:
+    """The short answer under the mark ("?" when the model wasn't sure), or None when
+    the reply isn't marked (the model judged it not a short, settled fact)."""
+    m = _FACT_RE.match(_THINK_RE.sub("", text or ""))
+    if not m:
+        return None
+    return _first_line(_THINK_RE.sub("", text or "")[m.end():]) or "?"
 
 
-def _answered_alone(side: str, res: tuple) -> bool:
-    """stop_when for mode "auto": side A answered and marked it as needing no second opinion."""
-    return side == "A" and res[0] is not None and _is_direct(res[0][0]["text"])
+def _key(text: str) -> str:
+    """An answer reduced for comparison: case, accents, punctuation, articles and
+    thousands separators don't count."""
+    t = "".join(c for c in unicodedata.normalize("NFKD", text or "") if not unicodedata.combining(c)).lower()
+    t = re.sub(r"(?<=\d),(?=\d{3}\b)|['’]", "", t)  # 1,000 is 1000; don't is dont
+    t = re.sub(r"(?<!\d)\.|\.(?!\d)|[^\w\s.]", " ", t)
+    t = re.sub(r"\b(?:the|a|an)\b", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _unsure(answer: str) -> bool:
+    raw = (answer or "").strip().strip("*_`").strip()
+    return not raw.strip("?.! ") or bool(_UNSURE_RE.match(_key(raw)))
+
+
+def _as_number(answer: str) -> Fraction | None:
+    t = (answer or "").strip().rstrip(".")
+    return Fraction(t.replace(",", "")) if _NUMBER_RE.match(t) else None
+
+
+def _same(run: Run, question: str, x: str, y: str, deadline: Deadline) -> bool | None:
+    """Whether two short answers say the same thing: by their text, as numbers, or
+    else by one utility call. None when that call failed."""
+    if _key(x) == _key(y):
+        return True
+    nx, ny = _as_number(x), _as_number(y)
+    if nx is not None and ny is not None:
+        return nx == ny
+    d = _utility_json(run, "same", SAME_PROMPT.format(question=question, x=x, y=y), deadline)
+    if not isinstance(d, dict) or not isinstance(d.get("same"), bool):
+        if d is not None:
+            run.record("error", where="same", kind="bad_json", detail='expected {"same": true or false}')
+        return None
+    return d["same"]
+
+
+def _vote(run: Run, asked: str, deadline: Deadline) -> tuple[str, str] | None:
+    """A third model's own short answer (it sees neither of the others), from the
+    judge's chain: a family that didn't answer. (answer, model) or None."""
+    chain = _chain("judge", "judge_fallbacks")
+    if not chain:
+        run.record("error", where="vote", kind="not_configured", detail="no judge model has its key set")
+    for cfg in chain:
+        try:
+            r = ask(cfg["provider"], cfg["model"], cfg.get("effort", "high"), VOTE_PROMPT.format(question=asked),
+                    deadline=deadline, purpose="vote")
+        except ProviderError as e:
+            run.record("error", where="vote", model=label(cfg), kind=e.kind.value, detail=e.short())
+            if e.kind is ErrorKind.DEADLINE:
+                run.out_of_time = True
+                return None
+            continue
+        text = _fact_answer(r["text"]) or _first_line(r["text"]) or "?"
+        run.record("answer", side="C", **_public({**r, "text": text}))
+        return text, label(cfg)
+    return None
+
+
+def _shorter(x: str, y: str) -> str:
+    """Of two answers that agree, the one that claims less ("1945" over "September 2, 1945")."""
+    return y if len(_key(y)) < len(_key(x)) else x
+
+
+NOT_SURE = "Not sure."  # the answer when the models don't agree; the note says what each said
+
+
+def _short_fact(run: Run, question: str, asked: str, facts: dict, who: dict, sides: dict,
+                deadline: Deadline) -> dict:
+    """Mode "auto"'s short-fact route. facts: side -> short answer ("?" when unsure),
+    for every side that answered; who: side -> the model that answered; asked: the
+    question as the sides saw it (with the conversation), for the third model.
+
+    The answer is one that two models gave on their own. A third model's agreement
+    counts only beside a "?" or a failed side, never against a different answer
+    (the plan's rule: a 2-of-3 vote counts only when the dissenter said "?").
+    Everything else is "not sure", with what each model said in the route note."""
+    sure = {s: a for s, a in facts.items() if not _unsure(a)}
+    missing = next((s for s in ("A", "B") if s not in facts), None)
+
+    def done(outcome: str, final: str, note: str, said: list) -> dict:
+        run.record("fact", verdict=outcome, answers=[{"model": m, "answer": a} for m, a in said])
+        return {"final": final, "outcome": outcome, "route": "fact", "route_note": note}
+
+    said = [(who[s], facts[s]) for s in ("A", "B") if s in facts]
+    if len(sure) == 2:
+        same = _same(run, question, sure["A"], sure["B"], deadline)
+        if same:
+            return done("agreed", _shorter(sure["A"], sure["B"]),
+                        f"Short fact: {who['A']} and {who['B']} each gave this answer on their own.", said)
+        if same is None:
+            run.degrade(run.failed("comparator_failed"))
+            return done("degraded", f"{who['A']}: {sure['A']}\n{who['B']}: {sure['B']}",
+                        "The two models' answers are worded differently, and checking whether they agree "
+                        "failed, so both are shown.", said)
+        return done("unsure", NOT_SURE,
+                    f"{who['A']}: {sure['A']} · {who['B']}: {sure['B']}. No source settled it.", said)
+    if not sure:
+        if missing:
+            run.record("note", detail=f"Side {missing} failed, and the side that answered wasn't sure.")
+        return done("unsure", NOT_SURE,
+                    " · ".join(f"{m}: not sure" for m, _ in said) + ".", said)
+    # One sure answer; the other side said "?" or failed. A third model answers on its own.
+    (s, x), = sure.items()
+    vote = _vote(run, asked, deadline)
+    if vote is None:
+        if missing:
+            run.degrade(run.failed(f"side_{missing.lower()}_failed"))
+            return done("degraded", x, f"Only {who[s]} answered, and no third model could check it.", said)
+        run.degrade(run.failed("judge_failed"))
+        return done("degraded", NOT_SURE,
+                    f"{who[s]}: {x} · {who[_other(s)]}: not sure; the third model failed.", said)
+    z, zwho = vote
+    said.append((zwho, z))
+    if not _unsure(z):
+        same = _same(run, question, x, z, deadline)
+        if same is None:
+            run.degrade(run.failed("comparator_failed"))
+            return done("degraded", NOT_SURE, f"{who[s]}: {x} · {zwho}: {z}; checking whether they agree failed.",
+                        said)
+        if same:
+            if missing:
+                run.record("note", detail=f"Side {missing} failed, so a third model checked side {s}'s answer.")
+                return done("agreed", _shorter(x, z),
+                            f"Short fact: {who[s]} and {zwho} each gave this answer on their own "
+                            f"({label(sides[missing])} failed).", said)
+            return done("majority", _shorter(x, z),
+                        f"Short fact: {who[s]} and {zwho} each gave this answer on their own; "
+                        f"{who[_other(s)]} wasn't sure.", said)
+    others = " · ".join(f"{m}: {'not sure' if _unsure(a) else a}" for m, a in said)
+    return done("unsure", NOT_SURE, f"{others}.", said)
+
+
+def _other(side: str) -> str:
+    return "B" if side == "A" else "A"
+
+
+def _fact_grace(fact_s: float, default_s: float):
+    """grace_for in mode "auto": once a side has answered with the short-fact mark,
+    wait fact_s (not minutes) for the other; the third model covers for a slow side."""
+    def grace_for(side: str, outcome: tuple) -> float:
+        result, _ = outcome
+        return fact_s if result and _fact_answer(result[0]["text"]) is not None else default_s
+    return grace_for
 
 
 def _chain(primary_key: str, fallback_key: str) -> list[dict]:
@@ -479,13 +665,15 @@ def prime_metrics() -> None:
 
 def run_pipeline(question: str, history: str, side_a: dict, side_b: dict, mode: str = "consensus",
                  files: list[str] | None = None, progress=lambda stage: None, *,
-                 deadline_s: float | None = None) -> dict:
+                 deadline_s: float | None = None, instruction: str = "") -> dict:
+    """instruction: text for the models after the question ("reply with only the
+    answer", from the benchmark); routing reads the question without it."""
     deadline = Deadline(deadline_s or float(pipeline_setting("run_deadline_s", 600)))
     run = Run(progress, deadline)
     with tm.span("consensus.run", **{"crossfact.mode": mode, "crossfact.side_a": label(side_a),
                                      "crossfact.side_b": label(side_b) if mode != "single" else None}) as sp:
         try:
-            result = _execute(run, question, history, side_a, side_b, mode, files, deadline)
+            result = _execute(run, question, instruction, history, side_a, side_b, mode, files, deadline)
         except Exception as e:  # a bug, not a provider failure: fail this run, keep the server
             run.record("error", where="pipeline", kind="internal", detail=f"{type(e).__name__}: {e}"[:300])
             result = {"final": "The run failed because of an internal error. It has been logged.",
@@ -500,18 +688,27 @@ def run_pipeline(question: str, history: str, side_a: dict, side_b: dict, mode: 
             sp.set_attribute("crossfact.degraded", ",".join(run.reasons))
         if outcome == "error":
             tm.mark_error(sp, "run failed")
-        # Metrics count what actually ran: an "auto" question answered alone is a
-        # single-model run, the rest are consensus runs (and count in its SLO).
-        metric_mode = {"direct": "single", "consensus": "consensus"}.get(route, mode)
+        # Metrics count what actually ran: mode "auto" counts as the route it took,
+        # so the consensus SLO still measures consensus runs only.
+        metric_mode = route or mode
         tm.RUNS.labels(metric_mode, outcome).inc()
         result_class = "success" if outcome in SUCCESS else outcome
         tm.observe(tm.RUN_DURATION, duration, mode=metric_mode, result=result_class)
-        run.record("final", outcome=outcome, degraded=run.reasons, duration_s=round(duration, 1))
+        run.record("final", outcome=outcome, degraded=run.reasons, duration_s=round(duration, 3 if duration < 1 else 1))
     return {"final": result["final"], "stages": run.stages, "outcome": outcome, "degraded": run.reasons,
-            "duration_s": round(duration, 1), "route": route}
+            "duration_s": round(duration, 3 if duration < 1 else 1), "route": route,
+            "route_note": result.get("route_note")}
 
 
-def _execute(run: Run, question, history, side_a, side_b, mode, files, deadline: Deadline) -> dict:
+def _execute(run: Run, question, instruction, history, side_a, side_b, mode, files, deadline: Deadline) -> dict:
+    if mode == "auto":
+        hit = exact.solve(question)  # the question alone: a computation doesn't depend on the conversation
+        if hit:
+            run.record("exact", kind=hit.kind, working=hit.working)
+            return {"final": hit.answer, "outcome": "exact", "route": "exact",
+                    "route_note": f"Computed in code, not by a model: {hit.working}"}
+    if instruction:
+        question = f"{question}\n\n{instruction}"
     q_full = f"Conversation so far:\n{history}\n\nCurrent question:\n{question}" if history else question
 
     if mode == "single":
@@ -529,28 +726,22 @@ def _execute(run: Run, question, history, side_a, side_b, mode, files, deadline:
     # -- independent answers, in parallel --------------------------------------------
     grace = float(pipeline_setting("straggler_grace_s", 150))
     auto = mode == "auto"
-    res = _both(_bound(_answer, side_a, q_full + ROUTE_NOTE if auto else q_full, files, deadline, "answer"),
-                _bound(_answer, side_b, q_full, files, deadline, "answer"), grace,
-                _answered_alone if auto else None)
-    if auto and _answered_alone("A", res["A"]):
-        # A calculation or a settled fact: side A's answer stands alone. Side B's
-        # call is left to finish in the background; its result is dropped.
-        r, _, sub = res["A"][0]
-        text = _strip_direct(r["text"])
-        run.record("note", detail="Side A judged this a calculation or a simple, settled fact and answered "
-                                  "alone: no second model, no cross-check.")
-        run.record("answer", side="A", substituted_from=sub, **_public({**r, "text": text}))
-        if sub:
-            tm.SUBSTITUTIONS.labels("A", side_a["model"], r["model"]).inc()
-        return {"final": text, "outcome": "single", "route": "direct"}
+    note = FACT_NOTE if auto else ""
+    res = _both(_bound(_answer, side_a, q_full + note, files, deadline, "answer"),
+                _bound(_answer, side_b, q_full + note, files, deadline, "answer"), grace,
+                _fact_grace(float(pipeline_setting("fact_grace_s", 30)), grace) if auto else None)
     sides = {"A": side_a, "B": side_b}
-    texts, effective = {}, {}
+    texts, effective, facts = {}, {}, {}
     for s in ("A", "B"):
         ok, err = res[s]
         if ok:
             r, eff, sub = ok
-            texts[s], effective[s] = r["text"], eff
-            run.record("answer", side=s, substituted_from=sub, **_public(r))
+            fact = _fact_answer(r["text"]) if auto else None
+            if fact is not None:  # a short answer under the mark: keep the answer, not the mark
+                facts[s] = fact
+            texts[s] = r["text"] if fact is None else ("I don't know." if _unsure(fact) else fact)
+            effective[s] = eff
+            run.record("answer", side=s, substituted_from=sub, **_public({**r, "text": fact or r["text"]}))
             if sub:
                 tm.SUBSTITUTIONS.labels(s, sides[s]["model"], r["model"]).inc()
         else:
@@ -562,6 +753,9 @@ def _execute(run: Run, question, history, side_a, side_b, mode, files, deadline:
     if not texts:
         return {"final": "Neither model could answer this time (see the pipeline transcript for why). "
                          "Nothing was counted against your daily quota.", "outcome": "error"}
+    if facts and len(facts) == len(texts):  # every side that answered marked it a short fact
+        return _short_fact(run, question, q_full, facts, {s: label(effective[s]) for s in facts}, sides,
+                           deadline)
     if len(texts) == 1:
         alive = next(iter(texts))
         run.degrade(f"side_{'b' if alive == 'A' else 'a'}_failed")

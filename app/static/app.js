@@ -14,9 +14,7 @@
     deadline: 'Stopped early to stay inside the time limit; anything unfinished is shown as it stood.',
     merge_failed: 'Merging failed, so both answers are shown in full.',
   };
-  const CHIP = {abandoned: 'interrupted', error: 'failed'};
-  const ROUTED = 'Answered by side A alone: a calculation or a simple, settled fact. Not cross-checked; ' +
-    'pick consensus mode to have both models check it.';
+  const CHIP = {abandoned: 'interrupted', error: 'failed', unsure: 'not sure', majority: '2 of 3'};
 
   // ---- every page: local times, confirm prompts ---------------------------------
   $$('time[data-ts]').forEach((t) => {
@@ -84,7 +82,8 @@
   // ---- rendering ---------------------------------------------------------------------
   function stageHtml(st) {
     let head = st.stage;
-    if (st.side) head += ` · side ${st.side}`;
+    if (st.side) head += st.side === 'C' ? ' · third model' : ` · side ${st.side}`;
+    if (st.stage === 'exact' && st.kind) head += ` · ${st.kind}`;
     if (st.provider) head += ` · ${st.provider}/${st.model} (${st.effort})`;
     if (st.round) head += ` · round ${st.round}`;
     if (st.attempts > 1) head += ` · ${st.attempts} attempts`;
@@ -111,6 +110,12 @@
         `${st.kind ? ' · ' + esc(st.kind) : ''}: ${esc(st.detail)}</pre>`;
     } else if (st.stage === 'note') {
       body = `<pre>${esc(st.detail)}</pre>`;
+    } else if (st.stage === 'exact') {
+      body = `<pre>${esc(st.working)}</pre>`;
+    } else if (st.stage === 'fact') {
+      const said = (st.answers || []).map((x) =>
+        `${esc(x.model)}: ${esc(['', '?'].includes((x.answer || '').trim()) ? 'not sure' : x.answer)}`).join('\n');
+      body = `<div class="cmp"><b>verdict:</b> ${esc(CHIP[st.verdict] || st.verdict)}</div><pre>${said}</pre>`;
     } else if (st.stage === 'final') {
       body = `<div class="cmp">outcome ${esc(st.outcome)}${st.duration_s != null ? ' in ' + st.duration_s + 's' : ''}</div>`;
     }
@@ -124,7 +129,7 @@
     el.querySelector('.verdictbar').className = 'verdictbar ' + oc;
     const chip = oc ? `<span class="chip ${esc(oc)}">${esc(CHIP[oc] || oc)}</span>` : '';
     const banners = (pl.degraded || []).map((r) => `<p class="banner">${esc(REASONS[r] || r)}</p>`).join('') +
-      (pl.route === 'direct' ? `<p class="banner routed">${esc(ROUTED)}</p>` : '');
+      (pl.route_note ? `<p class="banner routed ${esc(oc)}">${esc(pl.route_note)}</p>` : '');
     const last = stages[stages.length - 1];
     const running = data.status === 'running'
       ? `<div class="running">${last ? 'working: ' + esc(last.stage) : 'starting'}<span class="dots"></span></div>` : '';
@@ -149,20 +154,25 @@
   }
 
   function poll(mid, el) {
+    // Soon at first (an exact answer is ready at once, a short fact in seconds), then every 2.5 s.
     let failures = 0;
-    const timer = setInterval(async () => {
+    let n = 0;
+    const next = () => setTimeout(tick, n === 0 ? 300 : n < 8 ? 1000 : 2500);
+    async function tick() {
+      n += 1;
       let r;
       try { r = await fetch(`/api/messages/${mid}`, {credentials: 'same-origin'}); } catch (_) { r = null; }
       if (!r || !r.ok) {
         // A deploy can make one poll miss; give up only after a sustained outage.
-        if (++failures > 24) clearInterval(timer);
+        if (++failures <= 24) next();
         return;
       }
       failures = 0;
       const data = await r.json();
       renderAssistant(el, data);
-      if (data.status !== 'running') clearInterval(timer);
-    }, 2500);
+      if (data.status === 'running') next();
+    }
+    next();
   }
   $$('.msg.assistant[data-status="running"]').forEach((el) => poll(el.dataset.mid, el));
 
