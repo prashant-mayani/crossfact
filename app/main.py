@@ -57,6 +57,10 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(BASE, "templates"))
+# Static files are cached for an hour, by browsers and by Cloudflare's edge. A
+# per-build query string makes each deploy's CSS and JS a new URL, so a new
+# version shows up at once instead of up to an hour later (or half-styled).
+templates.env.globals["asset_v"] = VERSION[:12]
 
 
 @app.middleware("http")

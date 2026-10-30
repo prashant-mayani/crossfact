@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#101418">
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/app.css?v={{ asset_v }}">
 <title>{% block title %}Crossfact{% endblock %}</title>
 </head>
 <body class="{% block bodyclass %}{% endblock %}">
@@ -32,6 +32,6 @@
 <main class="{% block mainclass %}wrap{% endblock %}">
 {% block content %}{% endblock %}
 </main>
-<script src="/static/app.js" defer></script>
+<script src="/static/app.js?v={{ asset_v }}" defer></script>
 </body>
 </html>

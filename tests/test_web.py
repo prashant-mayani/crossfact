@@ -244,3 +244,13 @@ def test_chats_can_be_deleted_from_the_sidebar(client, admin, llm):
     assert r.headers["location"] == "/chat"
     assert db.thread_messages(t2) == [] and db.thread_messages(t1) == []
     assert 'action="/threads/' not in client.get("/chat").text
+
+
+def test_each_build_gets_fresh_css_and_js_urls(client):
+    from app.config import VERSION
+
+    page = client.get("/login").text
+    v = VERSION[:12]
+    assert f'href="/static/app.css?v={v}"' in page and f'src="/static/app.js?v={v}"' in page
+    r = client.get(f"/static/app.css?v={v}")
+    assert r.status_code == 200 and ".delthread" in r.text
