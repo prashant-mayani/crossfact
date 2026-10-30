@@ -3,6 +3,6 @@
   "private": true,
   "description": "Claude Code, baked into the Crossfact image as its native binary. Pinned here so Dependabot can propose updates (CI checks each one still reads the token: scripts/check_claude_cli.py).",
   "dependencies": {
-    "@anthropic-ai/claude-code": "2.1.307"
+    "@anthropic-ai/claude-code": "2.1.312"
   }
 }
