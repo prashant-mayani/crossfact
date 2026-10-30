@@ -56,6 +56,16 @@ def test_full_ask_poll_render_loop(client, admin, llm):
     assert "<script>" not in page  # boot data is a JSON block, not inline script
 
 
+def test_auto_is_the_default_mode_and_says_when_one_model_answered(client, admin, llm):
+    page = client.get("/chat").text
+    assert page.index('value="auto"') < page.index('value="consensus"')
+    llm.on(provider="alpha", purpose="answer", reply="[direct]\n5")
+    r = ask(client, admin, mode="auto")
+    d = wait_done(client, r.json()["message_id"])
+    assert d["pipeline"]["route"] == "direct" and d["content"] == "5"
+    assert "Answered by side A alone" in client.get(f"/chat/{r.json()['thread_id']}").text
+
+
 def test_degraded_run_is_labelled_and_offers_retry(client, admin, llm):
     from app.resilience import ErrorKind, ProviderError
 

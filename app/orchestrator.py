@@ -9,6 +9,12 @@
   judge      anonymized ruling per remaining conflict; may say "unverified"
   merge      union = agreements + unique_a + unique_b (+ rulings)
 
+Mode "auto" (the default) adds a fast path: side A's prompt asks it to mark a
+calculation or a simple, settled fact with one correct answer. When side A
+answers with that mark, the run ends there: side A's answer, labelled as not
+cross-checked, with no waiting for side B, no comparison and no debate. Anything
+else runs the full consensus with both answers, as mode "consensus" does.
+
 Everything runs inside one time budget (pipeline.run_deadline_s). When a step
 fails or the budget runs short, the run still finishes, but it is labelled
 "degraded" with the reason, never passed off as a consensus.
@@ -37,6 +43,17 @@ OUTCOMES_BY_MODE = {
     "union": ("union", "degraded", "error", "abandoned"),
     "consensus": ("agreed", "debated", "judged", "degraded", "error", "abandoned"),
 }
+# Mode "auto": side A marks what needs no second opinion (see the module docstring).
+DIRECT_MARK = "[direct]"
+ROUTE_NOTE = f"""
+
+(Routing note, not part of the question. If the question is a calculation, or asks
+for a simple, settled fact with exactly one correct answer that you are certain of,
+make the first line of your reply exactly {DIRECT_MARK} and then answer. For
+anything else, such as recent or changing facts, opinions, advice, comparisons,
+explanations, or anything you are less than certain about, answer normally without
+that line.)"""
+
 DEGRADE_REASONS = ("side_a_failed", "side_b_failed", "comparator_failed", "merge_failed", "judge_failed",
                    "deadline")
 
@@ -169,11 +186,14 @@ def _future(f: cf.Future):
 POLL_S = 0.25
 
 
-def _gather(futures: dict[str, cf.Future], grace_s: float) -> dict[str, tuple]:
+def _gather(futures: dict[str, cf.Future], grace_s: float, stop_when=None) -> dict[str, tuple]:
     """Wait for both sides, but once one has answered, give the other at most
     grace_s more. A side cut off this way comes back as a TIMEOUT marked
     straggler; its call keeps running in the background until its own timeout
     (bounded by the run deadline) and its result is dropped.
+
+    stop_when(side, (result, error)) -> True ends the wait at once (mode "auto":
+    side A answered on its own); the sides still pending are simply left out.
 
     Without this, one hung provider makes every user wait out its full timeout
     (game day "claude-hangs": 300-600 s for an answer the other model gave in 25 s).
@@ -190,6 +210,8 @@ def _gather(futures: dict[str, cf.Future], grace_s: float) -> dict[str, tuple]:
                 del pending[side]
                 if out[side][0] is not None and first_ok_at is None:
                     first_ok_at = time.monotonic()
+                if stop_when and stop_when(side, out[side]):
+                    return out
         if not pending:
             break
         if first_ok_at is not None and time.monotonic() - first_ok_at >= grace_s:
@@ -203,14 +225,31 @@ def _gather(futures: dict[str, cf.Future], grace_s: float) -> dict[str, tuple]:
     return out
 
 
-def _both(fn_a, fn_b, grace_s: float) -> dict[str, tuple]:
+def _both(fn_a, fn_b, grace_s: float, stop_when=None) -> dict[str, tuple]:
     """Run two calls in parallel; return {"A": (result, error), "B": (...)}.
     The executor is not joined: a straggler must not hold the run open."""
     ex = cf.ThreadPoolExecutor(max_workers=2, thread_name_prefix="side")
     try:
-        return _gather({"A": ex.submit(fn_a), "B": ex.submit(fn_b)}, grace_s)
+        return _gather({"A": ex.submit(fn_a), "B": ex.submit(fn_b)}, grace_s, stop_when)
     finally:
         ex.shutdown(wait=False)
+
+
+# The mark at the very start, alone on its line or not, bare or in markdown (**[direct]**).
+_DIRECT_RE = re.compile(r"\A\s*[*_`]*" + re.escape(DIRECT_MARK) + r"[*_`]*[ \t]*\n?", re.IGNORECASE)
+
+
+def _is_direct(text: str) -> bool:
+    return bool(_DIRECT_RE.match(text or ""))
+
+
+def _strip_direct(text: str) -> str:
+    return _DIRECT_RE.sub("", text or "", count=1).lstrip()
+
+
+def _answered_alone(side: str, res: tuple) -> bool:
+    """stop_when for mode "auto": side A answered and marked it as needing no second opinion."""
+    return side == "A" and res[0] is not None and _is_direct(res[0][0]["text"])
 
 
 def _chain(primary_key: str, fallback_key: str) -> list[dict]:
@@ -452,18 +491,24 @@ def run_pipeline(question: str, history: str, side_a: dict, side_b: dict, mode: 
             result = {"final": "The run failed because of an internal error. It has been logged.",
                       "outcome": "error"}
         outcome = result["outcome"]
+        route = result.get("route") or ("consensus" if mode == "auto" else None)
         duration = deadline.elapsed()
         sp.set_attribute("crossfact.outcome", outcome)
+        if route:
+            sp.set_attribute("crossfact.route", route)
         if run.reasons:
             sp.set_attribute("crossfact.degraded", ",".join(run.reasons))
         if outcome == "error":
             tm.mark_error(sp, "run failed")
-        tm.RUNS.labels(mode, outcome).inc()
+        # Metrics count what actually ran: an "auto" question answered alone is a
+        # single-model run, the rest are consensus runs (and count in its SLO).
+        metric_mode = {"direct": "single", "consensus": "consensus"}.get(route, mode)
+        tm.RUNS.labels(metric_mode, outcome).inc()
         result_class = "success" if outcome in SUCCESS else outcome
-        tm.observe(tm.RUN_DURATION, duration, mode=mode, result=result_class)
+        tm.observe(tm.RUN_DURATION, duration, mode=metric_mode, result=result_class)
         run.record("final", outcome=outcome, degraded=run.reasons, duration_s=round(duration, 1))
     return {"final": result["final"], "stages": run.stages, "outcome": outcome, "degraded": run.reasons,
-            "duration_s": round(duration, 1)}
+            "duration_s": round(duration, 1), "route": route}
 
 
 def _execute(run: Run, question, history, side_a, side_b, mode, files, deadline: Deadline) -> dict:
@@ -483,8 +528,21 @@ def _execute(run: Run, question, history, side_a, side_b, mode, files, deadline:
 
     # -- independent answers, in parallel --------------------------------------------
     grace = float(pipeline_setting("straggler_grace_s", 150))
-    res = _both(_bound(_answer, side_a, q_full, files, deadline, "answer"),
-                _bound(_answer, side_b, q_full, files, deadline, "answer"), grace)
+    auto = mode == "auto"
+    res = _both(_bound(_answer, side_a, q_full + ROUTE_NOTE if auto else q_full, files, deadline, "answer"),
+                _bound(_answer, side_b, q_full, files, deadline, "answer"), grace,
+                _answered_alone if auto else None)
+    if auto and _answered_alone("A", res["A"]):
+        # A calculation or a settled fact: side A's answer stands alone. Side B's
+        # call is left to finish in the background; its result is dropped.
+        r, _, sub = res["A"][0]
+        text = _strip_direct(r["text"])
+        run.record("note", detail="Side A judged this a calculation or a simple, settled fact and answered "
+                                  "alone: no second model, no cross-check.")
+        run.record("answer", side="A", substituted_from=sub, **_public({**r, "text": text}))
+        if sub:
+            tm.SUBSTITUTIONS.labels("A", side_a["model"], r["model"]).inc()
+        return {"final": text, "outcome": "single", "route": "direct"}
     sides = {"A": side_a, "B": side_b}
     texts, effective = {}, {}
     for s in ("A", "B"):

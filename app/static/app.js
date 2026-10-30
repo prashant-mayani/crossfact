@@ -15,6 +15,8 @@
     merge_failed: 'Merging failed, so both answers are shown in full.',
   };
   const CHIP = {abandoned: 'interrupted', error: 'failed'};
+  const ROUTED = 'Answered by side A alone: a calculation or a simple, settled fact. Not cross-checked; ' +
+    'pick consensus mode to have both models check it.';
 
   // ---- every page: local times, confirm prompts ---------------------------------
   $$('time[data-ts]').forEach((t) => {
@@ -121,7 +123,8 @@
     const oc = pl.outcome || '';
     el.querySelector('.verdictbar').className = 'verdictbar ' + oc;
     const chip = oc ? `<span class="chip ${esc(oc)}">${esc(CHIP[oc] || oc)}</span>` : '';
-    const banners = (pl.degraded || []).map((r) => `<p class="banner">${esc(REASONS[r] || r)}</p>`).join('');
+    const banners = (pl.degraded || []).map((r) => `<p class="banner">${esc(REASONS[r] || r)}</p>`).join('') +
+      (pl.route === 'direct' ? `<p class="banner routed">${esc(ROUTED)}</p>` : '');
     const last = stages[stages.length - 1];
     const running = data.status === 'running'
       ? `<div class="running">${last ? 'working: ' + esc(last.stage) : 'starting'}<span class="dots"></span></div>` : '';

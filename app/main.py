@@ -29,7 +29,7 @@ from .providers import EFFORTS, enabled_providers, health
 
 log = logging.getLogger("crossfact")
 BASE = os.path.dirname(__file__)
-MODES = ("consensus", "union", "single")
+MODES = ("auto", "consensus", "union", "single")  # auto: consensus, unless side A answers alone (orchestrator)
 DRAINING_MSG = "Crossfact is restarting for an update. Your question wasn't sent; try again in a minute."
 
 CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; "
@@ -279,6 +279,7 @@ def _start_job(mid: str, uid: str, question: str, history: str, side_a: dict, si
         try:
             out = run_pipeline(question, history, side_a, side_b, mode, file_paths, progress)
             record = {"stages": out["stages"], "outcome": out["outcome"], "degraded": out["degraded"],
+                      "route": out.get("route"),
                       "duration_s": out["duration_s"], "sides": {"A": side_a, "B": side_b}, "mode": mode,
                       "files": [os.path.basename(p) for p in file_paths]}
             status = "error" if out["outcome"] == "error" else "done"
@@ -300,7 +301,7 @@ def ask_route(request: Request,
               question: str = Form(...), thread_id: str = Form(""),
               a_provider: str = Form(...), a_model: str = Form(...), a_effort: str = Form("medium"),
               b_provider: str = Form(""), b_model: str = Form(""), b_effort: str = Form("medium"),
-              mode: str = Form("consensus"), file_ids: str = Form(""), csrf: str = Form(...)):
+              mode: str = Form("auto"), file_ids: str = Form(""), csrf: str = Form(...)):
     s = guard(request)
     check_csrf(s, csrf)
     if LIFECYCLE.draining.is_set():

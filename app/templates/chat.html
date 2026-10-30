@@ -10,6 +10,7 @@
   'deadline': 'Stopped early to stay inside the time limit; anything unfinished is shown as it stood.',
   'merge_failed': 'Merging failed, so both answers are shown in full.'} %}
 {% set CHIP = {'abandoned': 'interrupted', 'error': 'failed'} %}
+{% set ROUTED = 'Answered by side A alone: a calculation or a simple, settled fact. Not cross-checked; pick consensus mode to have both models check it.' %}
 
 {% macro stage_view(st) -%}
 <div class="stage {{ st.stage }}">
@@ -82,6 +83,7 @@ B: {{ st.b }}</pre>
           <div class="bubble">
             {% if oc %}<span class="chip {{ oc }}">{{ CHIP.get(oc, oc) }}</span>{% endif %}
             {% for r in pl.degraded or [] %}<p class="banner">{{ REASONS.get(r, r) }}</p>{% endfor %}
+            {% if pl.route == 'direct' %}<p class="banner routed">{{ ROUTED }}</p>{% endif %}
             <div class="content">{{ m.content }}</div>
             {% if m.status == 'running' %}<div class="running">running<span class="dots"></span></div>{% endif %}
             {% if m.status == 'error' or oc in ('degraded', 'abandoned') %}<button class="retry" type="button">Retry</button>{% endif %}
@@ -113,6 +115,7 @@ B: {{ st.b }}</pre>
       </div>
       <div class="side m">
         <select name="mode" aria-label="Mode">
+          <option value="auto">auto (calculations and simple facts: side A alone)</option>
           <option value="consensus">consensus (debate + judge)</option>
           <option value="union">union only (no debate)</option>
           <option value="single">single (side A only)</option>

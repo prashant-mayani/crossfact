@@ -304,3 +304,48 @@ def test_no_configured_judge_degrades_with_a_reason(llm, monkeypatch):
     out = run()
     assert out["outcome"] == "degraded" and "judge_failed" in out["degraded"]
     assert any(e.get("kind") == "not_configured" for e in stages(out, "error"))
+
+
+def test_auto_lets_side_a_answer_a_calculation_alone(llm):
+    from prometheus_client import REGISTRY
+
+    from app.orchestrator import ROUTE_NOTE
+
+    seen = []
+    llm.on(provider="alpha", purpose="answer", reply=lambda p: (seen.append(p), "[direct]\n2 + 3 = 5")[1])
+    before = REGISTRY.get_sample_value("crossfact_runs_total", {"mode": "single", "outcome": "single"}) or 0
+    out = run(mode="auto")
+    assert out["outcome"] == "single" and out["route"] == "direct" and out["final"] == "2 + 3 = 5"
+    assert ROUTE_NOTE.strip() in seen[0]                      # side A was asked to route
+    assert llm.count(purpose="compare") == 0 and llm.count(purpose="debate") == 0
+    assert [s["side"] for s in stages(out, "answer")] == ["A"] and stages(out, "note")
+    after = REGISTRY.get_sample_value("crossfact_runs_total", {"mode": "single", "outcome": "single"})
+    assert after == before + 1                                 # counted as a single-model run
+
+
+@pytest.mark.parametrize("reply", ["[direct]\n5", "[direct] 5", "**[direct]**\n5", "  [DIRECT]\n\n5"])
+def test_the_mark_is_found_however_side_a_writes_it(llm, reply):
+    llm.on(provider="alpha", purpose="answer", reply=reply)
+    out = run(mode="auto")
+    assert out["route"] == "direct" and out["final"] == "5"
+
+
+def test_the_mark_only_counts_at_the_start(llm):
+    llm.on(provider="alpha", purpose="answer", reply="It depends. Some would answer [direct] here.")
+    assert run(mode="auto")["route"] == "consensus"
+
+def test_auto_runs_the_full_consensus_when_side_a_does_not_answer_alone(llm):
+    from app.orchestrator import ROUTE_NOTE
+
+    out = run(mode="auto")
+    assert out["outcome"] == "agreed" and out["route"] == "consensus" and llm.count(purpose="compare") == 1
+    assert sum(ROUTE_NOTE.strip() in p for p in llm.prompts) == 1   # side A only, never side B
+
+
+def test_consensus_mode_never_takes_the_fast_path(llm):
+    from app.orchestrator import ROUTE_NOTE
+
+    llm.on(provider="alpha", purpose="answer", reply="[direct]\n5")
+    out = run()
+    assert out["route"] is None and out["outcome"] == "agreed"
+    assert not any(ROUTE_NOTE.strip() in p for p in llm.prompts)

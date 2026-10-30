@@ -43,8 +43,19 @@ question ─┬─▶ side A answers ─┐
 - **The answer is a union, not a vote**: everything both agreed on, each side's
   unique points, and the judge's rulings, merged by the utility model.
 
-Modes: `consensus` (the above), `union` (no debate or judge; conflicts are shown
-side by side), `single` (one model, labelled as such).
+Modes: `auto` (the default: the above, with a fast path), `consensus` (the
+above), `union` (no debate or judge; conflicts are shown side by side),
+`single` (one model, labelled as such).
+
+**The fast path in `auto`.** A calculation or a simple, settled fact gains
+nothing from a second model, a comparison or a debate, and waiting for them cost
+17 s for "what is 2+3" (Claude had answered in 4). So in `auto` side A's prompt
+asks it to mark exactly those (first line `[direct]`); recent or changing facts,
+opinions, advice and anything it is unsure of are left unmarked. A marked answer
+ends the run at once: side A's answer, labelled "not cross-checked", with no
+wait for side B (its call finishes in the background and is dropped). Unmarked
+questions run the full consensus. Metrics count marked runs as `single` and the
+rest as `consensus`, so the consensus SLO still measures consensus runs.
 
 ### Outcomes say exactly what you got
 

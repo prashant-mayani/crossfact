@@ -168,6 +168,7 @@ table.users th, table.users td { text-align: left; padding: .45rem .4rem;
 .chip.single { color: var(--a); border-color: var(--a); }
 .banner { margin: .2rem 0 .5rem; padding: .45rem .6rem; border-left: 3px solid var(--degraded);
   background: rgba(201, 163, 90, .08); color: #e9dcc0; font-size: .9rem; border-radius: 0 6px 6px 0; }
+.banner.routed { border-left-color: var(--dim); background: rgba(147, 161, 173, .08); color: var(--dim); }
 button.retry { margin-top: .5rem; background: none; color: var(--focus); border: 1px solid var(--line);
   border-radius: 6px; padding: .3rem .8rem; cursor: pointer; font: inherit; font-size: .85rem; }
 button.retry:disabled { opacity: .5; }
