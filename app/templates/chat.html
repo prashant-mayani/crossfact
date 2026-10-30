@@ -46,7 +46,15 @@ B: {{ st.b }}</pre>
 <aside class="threads" aria-label="Chats">
   <a class="newchat" href="/chat">+ New chat</a>
   {% for t in threads %}
-    <a class="thread {{ 'active' if thread and t.id == thread.id }}" href="/chat/{{ t.id }}">{{ t.title }}</a>
+    <div class="threadrow">
+      <a class="thread {{ 'active' if thread and t.id == thread.id }}" href="/chat/{{ t.id }}">{{ t.title }}</a>
+      <form class="delthread" method="post" action="/threads/{{ t.id }}/delete"
+            data-confirm="Delete the chat “{{ t.title }}”? This can’t be undone.">
+        <input type="hidden" name="csrf" value="{{ s.csrf }}">
+        <input type="hidden" name="back" value="{{ thread.id if thread else '' }}">
+        <button type="submit" title="Delete this chat" aria-label="Delete chat: {{ t.title }}">×</button>
+      </form>
+    </div>
   {% endfor %}
 </aside>
 

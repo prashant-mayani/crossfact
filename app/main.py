@@ -350,10 +350,14 @@ def poll_message(request: Request, mid: str):
 
 
 @app.post("/threads/{tid}/delete")
-def del_thread(request: Request, tid: str, csrf: str = Form(...)):
+def del_thread(request: Request, tid: str, csrf: str = Form(...), back: str = Form("")):
+    """Delete a chat and all its messages (uploaded files stay on the Files page).
+    Stays on the chat you were reading, unless that is the one deleted."""
     s = guard(request)
     check_csrf(s, csrf)
     db.delete_thread(tid, s["user_id"])
+    if back and back != tid and db.get_thread(back, s["user_id"]):
+        return RedirectResponse(f"/chat/{back}", status_code=303)
     return RedirectResponse("/chat", status_code=303)
 
 

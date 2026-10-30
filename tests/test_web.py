@@ -220,3 +220,27 @@ def test_without_a_bootstrap_password_sign_in_says_what_to_set(env, monkeypatch)
         secretstore.clear_cache()  # the secret store re-reads Vault's copy within a minute
         r = c.post("/login", data={"username": "admin", "password": "set-in-vault-later-1"}, follow_redirects=False)
         assert r.status_code == 303  # the account is created at this first sign-in
+
+
+def test_chats_can_be_deleted_from_the_sidebar(client, admin, llm):
+    from app import db
+
+    tids = []
+    for q in ("first <b>chat</b>", "second"):
+        r = ask(client, admin, question=q)
+        wait_done(client, r.json()["message_id"])
+        tids.append(r.json()["thread_id"])
+    t1, t2 = tids
+    page = client.get(f"/chat/{t2}").text
+    assert f'action="/threads/{t1}/delete"' in page and f'action="/threads/{t2}/delete"' in page
+    assert "data-confirm=" in page and "<b>chat</b>" not in page   # the title is escaped in the prompt
+    assert client.post(f"/threads/{t1}/delete", data={"csrf": "wrong"}).status_code == 403
+    # deleting another chat keeps you on the one you were reading
+    r = client.post(f"/threads/{t1}/delete", data={"csrf": admin, "back": t2}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == f"/chat/{t2}"
+    assert client.get(f"/chat/{t1}").status_code == 404
+    # deleting the open chat takes you to a new one, and its messages go with it
+    r = client.post(f"/threads/{t2}/delete", data={"csrf": admin, "back": t2}, follow_redirects=False)
+    assert r.headers["location"] == "/chat"
+    assert db.thread_messages(t2) == [] and db.thread_messages(t1) == []
+    assert 'action="/threads/' not in client.get("/chat").text

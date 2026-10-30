@@ -74,6 +74,13 @@ table.users th, table.users td { text-align: left; padding: .45rem .4rem;
 .threads .newchat { color: var(--ok); font-weight: 600; }
 .threads .thread.active, .threads .thread:hover { background: var(--panel2);
   color: var(--text); }
+.threadrow { display: flex; align-items: center; gap: .1rem; }
+.threadrow .thread { flex: 1; min-width: 0; }
+.delthread button { background: none; border: 0; color: var(--dim); cursor: pointer;
+  font-size: 1.05rem; line-height: 1; padding: .45rem .5rem; border-radius: 6px; visibility: hidden; }
+.threadrow:hover .delthread button, .threadrow:focus-within .delthread button,
+.threadrow .thread.active + .delthread button { visibility: visible; }
+.delthread button:hover, .delthread button:focus-visible { color: var(--judge); background: var(--panel2); }
 .stream { display: flex; flex-direction: column; min-width: 0; }
 .msgs { flex: 1; overflow-y: auto; padding: 1rem; display: flex;
   flex-direction: column; gap: .9rem; }
@@ -144,6 +151,8 @@ table.users th, table.users td { text-align: left; padding: .45rem .4rem;
   .threads { flex-direction: row; overflow-x: auto; border-right: 0;
     border-bottom: 1px solid var(--line); }
   .threads .thread { max-width: 42vw; flex: 0 0 auto; }
+  .threadrow { flex: 0 0 auto; }
+  .delthread button { visibility: visible; }   /* no hover on a phone */
   .topbar nav { gap: .6rem; font-size: .9rem; }
   .msgs { padding: .7rem; }
 }
