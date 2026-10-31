@@ -40,6 +40,7 @@ import random
 import re
 import time
 import unicodedata
+from datetime import date
 from fractions import Fraction
 
 from . import exact
@@ -115,7 +116,7 @@ ANSWER B:
 MERGE_PROMPT = """Combine the material below into one final answer to the question.
 This is a UNION: include every agreement and every unique point from both sides,
 deduplicated and organized; drop nothing substantive. Write the answer directly,
-with no meta-commentary about "Answer A" or "Answer B".
+with no meta-commentary about the answers, their sides or the judge.
 
 QUESTION:
 {question}
@@ -153,8 +154,8 @@ JUDGE_PROMPT = """You are a neutral arbiter. Two anonymous AI assistants gave fi
 still-conflicting positions on specific points after debate. For each numbered
 contested point, rule which position is better supported, or rule "unverified"
 if neither can be trusted without external evidence. You do not know which
-system produced which answer; judge only the content. Respond with ONLY JSON,
-one ruling per point:
+system produced which answer; judge only the content. Refer to the answers only
+as "Answer A" and "Answer B". Respond with ONLY JSON, one ruling per point:
 {{
  "rulings": [{{"point": 1, "winner": "A" | "B" | "unverified", "reason": "one or two sentences"}}],
  "analysis": "3-6 sentence overall analysis"
@@ -596,6 +597,14 @@ def _ruling_block(conflicts, rulings, analysis: str) -> str:
             "as uncertain, with both positions):\n" + "\n".join(lines) + f"\n\nJUDGE ANALYSIS:\n{analysis}")
 
 
+def _real_sides(text: str, flip: bool) -> str:
+    """The judge names the answers "Answer A" and "Answer B" as it saw them, in a
+    random order: name them by the sides they really were ("Answer A" -> "Side B")."""
+    swap = {"A": "B", "B": "A"} if flip else {"A": "A", "B": "B"}
+    return re.sub(r"\b(Answer|answer) ([AB])\b",
+                  lambda m: f"{'Side' if m[1] == 'Answer' else 'side'} {swap[m[2]]}", text)
+
+
 def _judge(run: Run, question: str, conflicts, a: str, b: str, deadline: Deadline) -> str | None:
     flip = random.random() < 0.5  # anonymize: the judge can't learn which side is which
     first, second = (b, a) if flip else (a, b)
@@ -625,8 +634,11 @@ def _judge(run: Run, question: str, conflicts, a: str, b: str, deadline: Deadlin
         if flip:  # the judge's "A" was the answer shown first, which was B's
             for r in rulings:
                 r["winner"] = {"A": "B", "B": "A"}.get(r["winner"], r["winner"])
-        run.record("judge", judge=label(cfg), rulings=rulings, analysis=j.get("analysis", ""), shown_swapped=flip)
-        return _ruling_block(conflicts, rulings, j.get("analysis", ""))
+        for r in rulings:
+            r["reason"] = _real_sides(str(r.get("reason", "")), flip)
+        analysis = _real_sides(str(j.get("analysis", "")), flip)
+        run.record("judge", judge=label(cfg), rulings=rulings, analysis=analysis, shown_swapped=flip)
+        return _ruling_block(conflicts, rulings, analysis)
     return None
 
 
@@ -665,15 +677,21 @@ def prime_metrics() -> None:
 
 def run_pipeline(question: str, history: str, side_a: dict, side_b: dict, mode: str = "consensus",
                  files: list[str] | None = None, progress=lambda stage: None, *,
-                 deadline_s: float | None = None, instruction: str = "") -> dict:
+                 deadline_s: float | None = None, instruction: str = "", today: date | None = None,
+                 tz: str = "") -> dict:
     """instruction: text for the models after the question ("reply with only the
-    answer", from the benchmark); routing reads the question without it."""
+    answer", from the benchmark); routing reads the question without it.
+    today, tz: the asker's own date and time zone (their browser's), when known:
+    "days until Christmas" is then exact, and every model is told the date
+    instead of guessing it (the server's clock is UTC: a day ahead each evening
+    in New York). The benchmark passes neither, so its prompts never change."""
     deadline = Deadline(deadline_s or float(pipeline_setting("run_deadline_s", 600)))
     run = Run(progress, deadline)
     with tm.span("consensus.run", **{"crossfact.mode": mode, "crossfact.side_a": label(side_a),
                                      "crossfact.side_b": label(side_b) if mode != "single" else None}) as sp:
         try:
-            result = _execute(run, question, instruction, history, side_a, side_b, mode, files, deadline)
+            result = _execute(run, question, instruction, history, side_a, side_b, mode, files, deadline,
+                              today, tz)
         except Exception as e:  # a bug, not a provider failure: fail this run, keep the server
             run.record("error", where="pipeline", kind="internal", detail=f"{type(e).__name__}: {e}"[:300])
             result = {"final": "The run failed because of an internal error. It has been logged.",
@@ -700,15 +718,19 @@ def run_pipeline(question: str, history: str, side_a: dict, side_b: dict, mode: 
             "route_note": result.get("route_note")}
 
 
-def _execute(run: Run, question, instruction, history, side_a, side_b, mode, files, deadline: Deadline) -> dict:
+def _execute(run: Run, question, instruction, history, side_a, side_b, mode, files, deadline: Deadline,
+             today: date | None = None, tz: str = "") -> dict:
     if mode == "auto":
-        hit = exact.solve(question)  # the question alone: a computation doesn't depend on the conversation
+        hit = exact.solve(question, today, tz)  # the question alone: a computation doesn't need the conversation
         if hit:
             run.record("exact", kind=hit.kind, working=hit.working)
             return {"final": hit.answer, "outcome": "exact", "route": "exact",
                     "route_note": f"Computed in code, not by a model: {hit.working}"}
     if instruction:
         question = f"{question}\n\n{instruction}"
+    if today:
+        question = (f"(Today is {exact.long_date(today)}" + (f", time zone {tz}" if tz else "")
+                    + ", where the person asking is.)\n\n" + question)
     q_full = f"Conversation so far:\n{history}\n\nCurrent question:\n{question}" if history else question
 
     if mode == "single":

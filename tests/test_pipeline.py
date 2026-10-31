@@ -518,3 +518,36 @@ def test_a_failed_check_of_the_third_models_answer_is_degraded_not_a_verdict(llm
     llm.on(purpose="same", error=ProviderError("boom", ErrorKind.SERVER))
     out = auto()
     assert out["outcome"] == "degraded" and out["degraded"] == ["comparator_failed"] and out["final"] == "Not sure."
+
+
+# ---- the asker's date, and the judge's labels ------------------------------------------
+
+def test_with_the_askers_date_days_until_christmas_is_exact(llm):
+    from datetime import date
+
+    out = auto("How many days until Christmas?", today=date(2026, 10, 30), tz="America/New_York")
+    assert out["route"] == "exact" and out["final"] == "56 days" and llm.calls == []
+    assert "(America/New_York)" in out["route_note"]
+
+
+def test_every_model_is_told_the_askers_date_and_the_benchmark_never_is(llm):
+    from datetime import date
+
+    auto("Who is the current UN Secretary-General?", today=date(2026, 10, 30), tz="America/New_York")
+    dated = "(Today is Friday, October 30, 2026, time zone America/New_York, where the person asking is.)"
+    assert len(llm.prompts) >= 2 and all(dated in p for p in llm.prompts)
+    llm.prompts.clear()
+    auto("Who is the current UN Secretary-General?")
+    assert not any("Today is" in p for p in llm.prompts)
+
+
+def test_the_judges_explanation_names_the_real_sides(llm, monkeypatch):
+    llm.on(purpose="compare", reply=COMPARE_CONFLICT)
+    llm.on(purpose="judge", reply=json.dumps({
+        "rulings": [{"point": 1, "winner": "A", "reason": "Answer A cites a source; answer B does not."}],
+        "analysis": "Answer A is better supported than Answer B."}))
+    monkeypatch.setattr("app.orchestrator.random.random", lambda: 0.0)  # shown swapped: its "A" is side B
+    judge = stages(run(), "judge")[0]
+    assert judge["rulings"][0]["winner"] == "B"
+    assert judge["rulings"][0]["reason"] == "Side B cites a source; side A does not."
+    assert judge["analysis"] == "Side B is better supported than Side A."

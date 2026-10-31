@@ -18,8 +18,9 @@ Declined on purpose:
     ("2+3!": a factorial, or an exclamation?)
   - units with several definitions ("ton", "calorie", "BTU", "MB", "year");
     gallons, quarts, pints, cups and fluid ounces are US units, and the answer says so
-  - dates written 03/04/2026 (month or day first?), before 1583 (Julian or
-    Gregorian?), or relative to today (the server can't know your time zone)
+  - dates written 03/04/2026 (month or day first?) or before 1583 (Julian or
+    Gregorian?); dates relative to today ("days until Christmas") unless the
+    asker's own date is known (the browser sends it: the server's clock runs on UTC)
 
 Forms:
   arithmetic  2+3, 487 × 36, 9,876 − 4,789, 2^20, 2 to the power of 10, 3 squared,
@@ -29,7 +30,8 @@ Forms:
   units       5 km in miles, convert 100 °F to °C, how many feet are in a mile
   dates       how many days between 2026-01-01 and March 1, 2026; 90 days after
               October 30, 2026; what day of the week was July 4, 1776; is 2100 a
-              leap year
+              leap year; and, given the asker's date, what's today's date, how many
+              days until Christmas, since July 4, or 90 days from today
 """
 from __future__ import annotations
 
@@ -37,7 +39,7 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
-from decimal import Decimal, localcontext
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 from fractions import Fraction
 from functools import lru_cache
 
@@ -61,17 +63,20 @@ class _Decline(Exception):
     """Not an exact question, or not one this parser can be sure it reads right."""
 
 
-def solve(question: str) -> Exact | None:
-    """The computed answer, or None when the question isn't (safely) an exact one."""
+def solve(question: str, today: date | None = None, where: str = "") -> Exact | None:
+    """The computed answer, or None when the question isn't (safely) an exact one.
+    today: the asker's own date, when known (questions relative to it are answered
+    only then); where: their time zone, named in the working."""
     q = (question or "").strip()
     if not q or len(q) > MAX_LEN or "\n" in q:
         return None
-    return _solve(_clean(q))
+    return _solve(_clean(q), today.isoformat() if today else None, where if today else "")
 
 
 @lru_cache(maxsize=4096)
-def _solve(text: str) -> Exact | None:
-    for form in (_dates, _units, _arithmetic):
+def _solve(text: str, today: str | None = None, where: str = "") -> Exact | None:
+    day = date.fromisoformat(today) if today else None
+    for form in (lambda t: _dates(t, day, where), _units, _arithmetic):
         try:
             hit = form(text)
         except (_Decline, ArithmeticError, ValueError, RecursionError):
@@ -175,6 +180,21 @@ def _sci(d: Decimal, sig: int) -> str:
     mant, exp = f"{d:.{sig - 1}e}".split("e")
     mant = mant.rstrip("0").rstrip(".") if "." in mant else mant
     return f"{mant}e{int(exp):+d}"
+
+
+def _friendly(v: _V) -> tuple[str, bool]:
+    """A measurement as people write it: exactly when that's short (2.54, 96.56064),
+    else to 4 significant digits and at least 2 decimals (37.78, 3.107, 39370.08)."""
+    text, exact = _fmt(v)
+    if exact and len(text.partition(".")[2]) <= 6:
+        return text, True
+    d = v.d
+    if d == 0 or abs(d) >= Decimal(10) ** 15 or abs(d) < Decimal("1e-6"):
+        return _sci(d, 4), False
+    places = max(2, 3 - d.copy_abs().adjusted())
+    with localcontext() as c:
+        c.prec = _PREC
+        return _plain(d.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)), False
 
 
 def _approx(d: Decimal, sig: int = SIG) -> str:
@@ -614,10 +634,11 @@ def _units(t: str) -> Exact | None:
         if u1.dim != u2.dim or n < 0:
             raise _Decline  # 5 kg in miles, or a negative length: not a conversion
         v = _V(n * u1.size / u2.size)
+        shown, shown_exact = _friendly(v)
         text, exact = _fmt(v)
         name = u2.singular if v.q == 1 else u2.plural
         rel = "=" if exact else "≈"
-        return Exact(f"{'' if exact else '≈ '}{text} {name}",
+        return Exact(f"{'' if shown_exact else '≈ '}{shown} {name}",
                      f"{_fmt(_V(n))[0]} {u1.symbol} {rel} {text} {u2.symbol}{_basis(u1, u2)}", "units")
     return None
 
@@ -637,10 +658,12 @@ def _temperature(n: Fraction, a: str, b: str) -> Exact:
     if kelvin < 0:
         raise _Decline  # below absolute zero: not a temperature
     out = {"C": kelvin - _F("273.15"), "F": (kelvin - _F("273.15")) * _F(9, 5) + 32, "K": kelvin}[b]
+    shown, shown_exact = _friendly(_V(out))
     text, exact = _fmt(_V(out))
-    rel = "=" if exact else "≈"
-    return Exact(f"{'' if exact else '≈ '}{text} {_TEMP_SHOWN[b]}",
-                 f"{_fmt(_V(n))[0]} {_TEMP_SHOWN[a]} {rel} {text} {_TEMP_SHOWN[b]}", "units")
+    unit = _TEMP_SHOWN[b]
+    working = f"{_fmt(_V(n))[0]} {_TEMP_SHOWN[a]} = {text} {unit}" if exact else (
+        f"{_fmt(_V(n))[0]} {_TEMP_SHOWN[a]} = {out.numerator}/{out.denominator} {unit} ≈ {text} {unit}")
+    return Exact(f"{'' if shown_exact else '≈ '}{shown} {unit}", working, "units")
 
 
 # ---- dates --------------------------------------------------------------------------------
@@ -654,7 +677,7 @@ _DATE_FORMS = [
     re.compile(rf"^(?:the )?(?P<d>\d{{1,2}})(?:st|nd|rd|th)? (?:of )?(?P<mon>{_MON})\.?,? (?P<y>\d{{4}})$"),
     re.compile(rf"^(?P<mon>{_MON})\.? (?:the )?(?P<d>\d{{1,2}})(?:st|nd|rd|th)?,? (?P<y>\d{{4}})$"),
 ]
-_D1, _D2, _DT = (rf"(?P<{k}>[a-z0-9 ,.-]+?)" for k in ("d1", "d2", "d"))
+_D1, _D2, _DT = (rf"(?P<{k}>[a-z0-9 ,.'-]+?)" for k in ("d1", "d2", "d"))
 _BETWEEN = re.compile(rf"^(?:how many |the number of |number of )?(?P<unit>days|weeks) (?:are there |is it )?"
                       rf"(?:between|from) {_D1} (?:and|to|until|till) {_D2}$")
 _SHIFT = re.compile(rf"^(?:what (?:date|day) (?:is|was|will (?:it )?be) |what is the date |the date )?"
@@ -667,12 +690,35 @@ _WEEKDAY = [
     re.compile(rf"^(?:what|which) day of the week (?:did|does|will) {_DT} (?:fall on|fall|be)$"),
 ]
 _LEAP = re.compile(r"^(?:is|was|will) (?P<y>\d{4}) (?:be )?a leap year$")
+# Relative to the asker's date (only when it is known):
+_REL = r"today|tomorrow|yesterday"
+_TODAY = re.compile(rf"^(?:(?:what|which) (?:day|date)(?: of the week)? is it(?: today)?"
+                    rf"|(?:what|which) (?:day|date)(?: of the week)? (?:is|was|will it be|will be) (?P<r1>{_REL})"
+                    rf"|(?:what (?:was|will be) )?(?:the )?(?:date|day)(?: (?P<r2>{_REL}))?"
+                    rf"|(?P<r3>{_REL})(?:'?s date)?)$")
+_UNTIL = re.compile(rf"^(?:how many (?P<u1>days|weeks)|(?P<u2>days|weeks)|how long|how much time)"
+                    rf"(?: are there| is it| is there| are left| left)? (?:until|till|til|to|before) {_DT}$")
+_SINCE = re.compile(rf"^(?:how many (?P<u1>days|weeks)|(?P<u2>days|weeks)|how long)"
+                    rf"(?: have passed| has it been| is it| have gone by)? since {_DT}$")
+_AGO_IN = re.compile(r"^(?:what (?:date|day) (?:is|was|will (?:it )?be) |what (?:is|was) the date |the date )?"
+                     r"(?:in (?P<n1>\d+|a|one) (?P<u1>days?|weeks?)|(?P<n2>\d+|a|one) (?P<u2>days?|weeks?) ago)$")
+_HOLIDAYS = {"christmas": (12, 25), "christmas day": (12, 25), "xmas": (12, 25), "christmas eve": (12, 24),
+             "new year": (1, 1), "new years": (1, 1), "new year's": (1, 1), "new year's day": (1, 1),
+             "new years day": (1, 1), "new year's eve": (12, 31), "new years eve": (12, 31),
+             "halloween": (10, 31), "valentine's day": (2, 14), "valentines day": (2, 14)}
+_MONTH_DAY = [
+    re.compile(rf"^(?P<mon>{_MON})\.? (?:the )?(?P<d>\d{{1,2}})(?:st|nd|rd|th)?$"),
+    re.compile(rf"^(?P<d>\d{{1,2}})(?:st|nd|rd|th)? (?:of )?(?P<mon>{_MON})$"),
+]
 _WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 _MONTH_NAMES = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
                 "November", "December")
 
 
-def _date(s: str) -> date:
+def _date(s: str, today: date | None = None, back: bool = False) -> date:
+    """A date in the question. Written in full, always. Relative to the asker's
+    date ("today", "tomorrow", "Christmas", "March 1": the next one, or the last
+    one when back) only when that date is known."""
     s = s.strip()
     for form in _DATE_FORMS:
         m = form.match(s)
@@ -683,15 +729,53 @@ def _date(s: str) -> date:
             if d.year < FIRST_GREGORIAN_YEAR:
                 raise _Decline  # Julian or Gregorian? It depends on the country.
             return d
+    s = s.removeprefix("the ")
+    m = re.match(r"^(?P<h>.+?),? (?P<y>\d{4})$", s)  # Christmas 2026
+    if m and m["h"] in _HOLIDAYS:
+        d = date(int(m["y"]), *_HOLIDAYS[m["h"]])
+        if d.year < FIRST_GREGORIAN_YEAR:
+            raise _Decline
+        return d
+    if today is None:
+        raise _Decline  # relative to a day we don't know
+    if s in ("today", "now"):
+        return today
+    if s in ("tomorrow", "yesterday"):
+        return today + timedelta(days=1 if s == "tomorrow" else -1)
+    month_day = _HOLIDAYS.get(s)
+    for form in _MONTH_DAY:
+        m = form.match(s)
+        if m and month_day is None:
+            month_day = (_MONTHS[m["mon"]], int(m["d"]))
+    if month_day is None:
+        raise _Decline
+    for k in range(9):  # February 29 can be eight years away
+        try:
+            d = date(today.year - k if back else today.year + k, *month_day)
+        except ValueError:
+            continue
+        if (d <= today) if back else (d >= today):
+            return d
     raise _Decline
 
 
-def _long(d: date) -> str:
+def long_date(d: date) -> str:
+    """Friday, October 30, 2026"""
     return f"{_WEEKDAYS[d.weekday()]}, {_MONTH_NAMES[d.month - 1]} {d.day}, {d.year}"
+
+
+_long = long_date
 
 
 def _plural(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def _span(days: int, unit: str) -> str:
+    if unit == "weeks":
+        w, r = divmod(days, 7)
+        return _plural(w, "week") + (f" and {_plural(r, 'day')}" if r else "")
+    return _plural(days, "day")
 
 
 def _shift(start: date, days: int, back: bool) -> Exact:
@@ -701,30 +785,58 @@ def _shift(start: date, days: int, back: bool) -> Exact:
     return Exact(_long(end), f"{_long(start)} {'-' if back else '+'} {_plural(days, 'day')} = {_long(end)}", "dates")
 
 
-def _dates(t: str) -> Exact | None:
+def _from_today(hit: Exact, today: date, now: str) -> Exact:
+    """Name today (and the time zone it is today in) in the working."""
+    working = hit.working.replace(_long(today), now, 1)
+    return Exact(hit.answer, working[:1].upper() + working[1:], hit.kind)
+
+
+def _dates(t: str, today: date | None = None, where: str = "") -> Exact | None:
+    now = (f"today, {_long(today)}" + (f" ({where})" if where else "")) if today else ""
+    m = _TODAY.match(t) if today else None
+    if m:
+        rel = m["r1"] or m["r2"] or m["r3"] or "today"
+        d = _date(rel, today)
+        verb = "was" if rel == "yesterday" else "is"
+        return Exact(_long(d), f"It is {now}" + ("" if rel == "today" else f", so {rel} {verb} {_long(d)}"), "dates")
     m = _BETWEEN.match(t)
     if m:
-        d1, d2 = _date(m["d1"]), _date(m["d2"])
+        d1, d2 = _date(m["d1"], today), _date(m["d2"], today)
         days = abs((d2 - d1).days)
         span = f"From {_long(min(d1, d2))} to {_long(max(d1, d2))}"
         if m["unit"] == "weeks":
-            w, r = divmod(days, 7)
-            answer = _plural(w, "week") + (f" and {_plural(r, 'day')}" if r else "")
-            return Exact(answer, f"{span}: {_plural(days, 'day')} = {answer}", "dates")
+            return Exact(_span(days, "weeks"), f"{span}: {_plural(days, 'day')} = {_span(days, 'weeks')}", "dates")
         return Exact(_plural(days, "day"), f"{span}: {_plural(days, 'day')} (counting one end; {days + 1} counting "
                                            "both the first and the last day)", "dates")
+    for form, back in ((_UNTIL, False), (_SINCE, True)):
+        m = form.match(t) if today else None
+        if m:
+            unit = m["u1"] or m["u2"] or "days"
+            d = _date(m["d"], today, back=back)
+            days = (today - d).days if back else (d - today).days
+            if days < 0:
+                raise _Decline  # "until" a day that has passed, "since" one still to come
+            answer = _span(days, unit) + (" (it's today)" if days == 0 else "")
+            ends = f"from {_long(d)} to {now}" if back else f"from {now}, to {_long(d)}"
+            return Exact(answer, f"{ends[0].upper()}{ends[1:]}: {_plural(days, 'day')}", "dates")
+    m = _AGO_IN.match(t) if today else None
+    if m:
+        n, unit = (m["n1"], m["u1"]) if m["n1"] else (m["n2"], m["u2"])
+        days = (1 if n in ("a", "one") else int(n)) * (7 if unit.startswith("week") else 1)
+        return _from_today(_shift(today, days, back=not m["n1"]), today, now)
     m = _SHIFT.match(t)
     if m:
         n = int(m["n"].replace(",", "")) * (7 if m["unit"].startswith("week") else 1)
-        return _shift(_date(m["d"]), n, m["dir"] in ("before", "earlier than"))
+        hit = _shift(_date(m["d"], today), n, m["dir"] in ("before", "earlier than"))
+        return _from_today(hit, today, now) if m["d"].strip() in ("today", "now") else hit
     m = _PLUS.match(t)
     if m:
         n = int(m["n"]) * (7 if m["unit"].startswith("week") else 1)
-        return _shift(_date(m["d"]), n, m["op"] in ("minus", "-"))
+        return _shift(_date(m["d"], today), n, m["op"] in ("minus", "-"))
     for form in _WEEKDAY:
         m = form.match(t)
         if m:
-            d = _date(m["d"])
+            d = _date(m["d"], today)
             return Exact(_WEEKDAYS[d.weekday()], f"{_long(d)} (Gregorian calendar)", "dates")
     m = _LEAP.match(t)
     if m:

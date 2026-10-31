@@ -35,8 +35,9 @@ question ─┬─▶ side A answers ─┐
   Groq's free tier, with the same weights on Workers AI as the fallback. The two
   answers are shown as A and B in a random order; each contested point is
   numbered and labelled the same way ("Answer A says ..."), and each ruling is
-  matched back by number. Only if both GPT-OSS hosts fail does a side's own
-  family judge, and the transcript says so.
+  matched back by number. Its reasons are shown with the real sides' names
+  (its "Answer A" may have been side B). Only if both GPT-OSS hosts fail does a
+  side's own family judge, and the transcript says so.
 - **Rulings carry their content.** The merge receives the ruled-correct position
   itself for each point (and both positions for an "unverified" one), not a
   side letter it would have no way to look up.
@@ -63,10 +64,23 @@ to a guess. So `auto` picks one of three routes:
 is 2.54 cm), and the Gregorian calendar: the same answer, at once, every time,
 with the working shown, and no quota used. The parser takes a question only if
 the whole of it reads as a calculation; "9/11", "24/7", phone numbers, "0x10",
-0^0, a "ton" or a "calorie", 03/04/2026 and anything relative to today go to
-the models instead, because a wrong capture would be a wrong answer. On the
+0^0, a "ton" or a "calorie" and 03/04/2026 go to the models instead, because a
+wrong capture would be a wrong answer. Measurements are shown as people write
+them ("≈ 37.78 °C"), with the exact value (340/9) in the working. On the
 bundled exact set (`bench/sets/exact.yaml`, 30 questions written for the
 models) it takes 13 and gets all 13 right; a test keeps it that way.
+
+**Today is the asker's today.** The server's clock runs on UTC, a day ahead of
+New York every evening, and Gemini doesn't know the date at all, so "how many
+days until Christmas" once got 55 from one model, "it depends" from the other,
+and a 41-second debate. The browser now sends its own date and time-zone name
+with each question. The date is believed only within a day of UTC's (true of
+every time zone); the name is only a label. With it, questions relative to
+today are exact ("how many days until Christmas", "since July 4", "90 days
+from today", "what's today's date"), and every model is told "Today is Friday,
+October 30, 2026, time zone America/New_York" instead of guessing. Without it
+(the benchmark, a script) those questions go to the models as before, and no
+prompt mentions a date.
 
 **Short fact.** Both sides get the question with a routing note: if it has one
 short answer that doesn't change over time, reply `[fact]` and the answer, or

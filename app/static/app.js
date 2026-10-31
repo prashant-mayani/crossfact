@@ -77,7 +77,47 @@
   const modeSel = $('select[name="mode"]');
   const syncMode = () => $('.side.b').classList.toggle('off', modeSel.value === 'single');
   modeSel.addEventListener('change', syncMode);
+
+  // Your picks survive a new chat or a reload (this browser only). Until you change
+  // one, the server's defaults apply, including a promoted model.
+  const PICKS = 'crossfact.picks';
+  const PICK_FIELDS = ['a_provider', 'a_model', 'a_effort', 'b_provider', 'b_model', 'b_effort', 'mode'];
+  const has = (sel, v) => Array.from(sel.options).some((o) => o.value === v && !o.disabled);
+  function restorePicks() {
+    let p = null;
+    try { p = JSON.parse(localStorage.getItem(PICKS) || 'null'); } catch (_) { p = null; }
+    if (!p) return;
+    for (const side of ['a', 'b']) {
+      const psel = $(`select[name="${side}_provider"]`);
+      if (has(psel, p[`${side}_provider`])) {
+        psel.value = p[`${side}_provider`];
+        fillModels(side, p[`${side}_model`]);
+      }
+      const esel = $(`select[name="${side}_effort"]`);
+      if (has(esel, p[`${side}_effort`])) esel.value = p[`${side}_effort`];
+    }
+    if (has(modeSel, p.mode)) modeSel.value = p.mode;
+  }
+  restorePicks();
   syncMode();
+  composer.addEventListener('change', (e) => {
+    if (!PICK_FIELDS.includes(e.target.name)) return;
+    try {
+      const p = {};
+      for (const f of PICK_FIELDS) p[f] = $(`select[name="${f}"]`).value;
+      localStorage.setItem(PICKS, JSON.stringify(p));
+    } catch (_) { /* storage blocked: picks just aren't remembered */ }
+  });
+
+  // Your own date and time zone go with each question: the server's clock is UTC.
+  function localDay() {
+    const d = new Date();
+    const two = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+  }
+  function timeZone() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (_) { return ''; }
+  }
 
   // ---- rendering ---------------------------------------------------------------------
   function stageHtml(st) {
@@ -88,7 +128,7 @@
     if (st.round) head += ` · round ${st.round}`;
     if (st.attempts > 1) head += ` · ${st.attempts} attempts`;
     if (st.stage === 'answer' && st.duration_s != null) head += ` · ${st.duration_s}s`;
-    if (st.t != null) head += ` · t+${st.t}s`;
+    if (st.t != null) head += ` · t+${Number(st.t).toFixed(1)}s`;
     let body = '';
     if (st.stage === 'answer') {
       if (st.substituted_from) body += `<div class="sub">Stood in for ${esc(st.substituted_from)}, which failed.</div>`;
@@ -179,6 +219,8 @@
   // ---- submit & retry ------------------------------------------------------------------
   async function submit(fd, questionText) {
     fd.set('csrf', BOOT.csrf);
+    fd.set('today', localDay());
+    fd.set('tz', timeZone());
     formerr.textContent = '';
     $('#send').disabled = true;
     let r;

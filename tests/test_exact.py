@@ -1,6 +1,7 @@
 """The exact route: what it computes, and (as important) what it leaves to the models."""
 import re
 import time
+from datetime import date
 
 import pytest
 
@@ -53,7 +54,7 @@ def test_arithmetic(question, answer, working):
 
 
 @pytest.mark.parametrize(("question", "answer"), [
-    ("5 km in miles", "≈ 3.106855961 miles"),
+    ("5 km in miles", "≈ 3.107 miles"),                         # rounded as people write it
     ("What is 5 miles in kilometers?", "8.04672 kilometers"),
     ("How many feet are in a mile?", "5280 feet"),
     ("how many cm in 3 inches", "7.62 centimeters"),
@@ -64,11 +65,13 @@ def test_arithmetic(question, answer, working):
     ("how many fluid ounces in a cup", "8 US fluid ounces"),
     ("how many seconds in a day", "86400 seconds"),
     ("how many teaspoons in a tablespoon", "3 US teaspoons"),
-    ("convert 100 °F to °C", "≈ 37.77777778 °C"),
+    ("convert 100 °F to °C", "≈ 37.78 °C"),
+    ("1 km in inches", "≈ 39370.08 inches"),                    # at least two decimals
+    ("1 oz in kg", "≈ 0.02835 kilograms"),                      # at least four significant digits
     ("100 degrees celsius in fahrenheit", "212 °F"),
     ("-40 f to c", "-40 °C"),
     ("0 K in C", "-273.15 °C"),
-    ("1 acre in square meters", "4046.8564224 square meters"),
+    ("1 acre in square meters", "≈ 4046.86 square meters"),    # the exact 4046.8564224 is in the working
     ("1 kWh in kilojoules", "3600 kilojoules"),
     ("1 atm in kPa", "101.325 kilopascals"),
 ])
@@ -77,9 +80,10 @@ def test_unit_conversions_use_exact_definitions(question, answer):
     assert r is not None and r.kind == "units" and r.answer == answer
 
 
-def test_a_conversion_shows_the_definitions_it_used():
+def test_a_conversion_shows_the_definitions_it_used_and_the_unrounded_value():
     assert solve("5 km in miles").working == ("5 km ≈ 3.106855961 mi (by definition, 1 km = 1000 m; "
                                              "1 mi = 1609.344 m)")
+    assert solve("convert 100 °F to °C").working == "100 °F = 340/9 °C ≈ 37.77777778 °C"
 
 
 @pytest.mark.parametrize(("question", "answer"), [
@@ -119,7 +123,7 @@ def test_a_span_of_days_says_how_it_counted():
     "how many MB in a GB", "5 tons in kg", "5 kg in miles", "-500 c to f",
     "how many days between 03/04/2026 and 05/06/2026",   # month or day first?
     "what day of the week was october 12, 1492",         # Julian or Gregorian?
-    "how many days until christmas", "what day is it", "what is 30 days from today",
+    "how many days until christmas", "what day is it", "what is 30 days from today",   # without the asker's date
     # too big to be worth computing
     "what is 9^9^9", "what is 2^1000000",
     # two lines, or a long text, is never a calculation
@@ -171,3 +175,44 @@ def test_every_answer_it_gives_on_the_bundled_exact_set_is_right():
     assert len(taken) >= 13
     wrong = [(q["id"], q["answer"], r.answer) for q, r in taken if not _matches(str(q["answer"]), r.answer)]
     assert wrong == []
+
+
+# ---- relative to the asker's own date (their browser sends it) ----------------------------
+
+TODAY = date(2026, 10, 30)   # a Friday, in New York; it was already October 31 in UTC
+
+
+@pytest.mark.parametrize(("question", "answer"), [
+    ("How many days until Christmas?", "56 days"),               # 55 by the server's UTC date
+    ("how long until halloween", "1 day"),
+    ("how many weeks until new year's", "9 weeks"),
+    ("how many days since July 4", "118 days"),
+    ("how many days since christmas", "309 days"),               # the last one: December 25, 2025
+    ("how many days until february 29", "487 days"),             # the next one is in 2028
+    ("how many days until christmas 2027", "421 days"),
+    ("how many days between today and christmas", "56 days"),
+    ("What's today's date?", "Friday, October 30, 2026"),
+    ("what day is it", "Friday, October 30, 2026"),
+    ("what day is tomorrow", "Saturday, October 31, 2026"),
+    ("what was the date yesterday", "Thursday, October 29, 2026"),
+    ("90 days from today", "Thursday, January 28, 2027"),
+    ("in 2 weeks", "Friday, November 13, 2026"),
+    ("10 days ago", "Tuesday, October 20, 2026"),
+    ("what day of the week is christmas", "Friday"),
+])
+def test_dates_relative_to_the_asker_are_exact_when_their_date_is_known(question, answer):
+    r = solve(question, TODAY, "America/New_York")
+    assert r is not None and r.answer == answer
+
+
+def test_the_working_names_today_and_the_time_zone():
+    assert solve("how many days until christmas", TODAY, "America/New_York").working == (
+        "From today, Friday, October 30, 2026 (America/New_York), to Friday, December 25, 2026: 56 days")
+    assert solve("halloween", TODAY) is None and solve("how many days until 2025-01-01", TODAY) is None
+    assert solve("how many days until my birthday", TODAY) is None
+    assert solve("how many days until halloween", date(2026, 10, 31)).answer == "0 days (it's today)"
+
+
+def test_a_cached_answer_is_never_reused_on_another_day():
+    assert solve("how many days until christmas", TODAY).answer == "56 days"
+    assert solve("how many days until christmas", date(2026, 10, 31)).answer == "55 days"

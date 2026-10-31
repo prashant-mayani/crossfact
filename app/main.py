@@ -13,6 +13,7 @@ import re
 import threading
 import time
 from contextlib import asynccontextmanager
+from datetime import UTC, date, datetime
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -264,8 +265,28 @@ def _history_text(tid: str) -> str:
     return "\n\n".join(lines)[-budget:]
 
 
+_TZ_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+){0,2}$")
+
+
+def _utc_today() -> date:
+    return datetime.now(UTC).date()
+
+
+def _asker_day(today: str, tz: str) -> tuple[date | None, str]:
+    """The asker's own date and time-zone name, from their browser. The date is
+    believed only within a day of the server's UTC date (every time zone is); the
+    name is only a label for the models and the working."""
+    try:
+        day = date.fromisoformat(today) if today else None
+    except ValueError:
+        return None, ""
+    if day is None or abs((day - _utc_today()).days) > 1:
+        return None, ""
+    return day, tz if len(tz) <= 64 and _TZ_NAME.match(tz) else ""
+
+
 def _start_job(mid: str, uid: str, question: str, history: str, side_a: dict, side_b: dict, mode: str,
-               file_paths: list[str]) -> None:
+               file_paths: list[str], today: date | None = None, tz: str = "") -> None:
     lock = threading.Lock()
 
     def progress(stage: dict) -> None:
@@ -277,7 +298,7 @@ def _start_job(mid: str, uid: str, question: str, history: str, side_a: dict, si
 
     def work() -> None:  # already counted in flight by the caller (LIFECYCLE.begin)
         try:
-            out = run_pipeline(question, history, side_a, side_b, mode, file_paths, progress)
+            out = run_pipeline(question, history, side_a, side_b, mode, file_paths, progress, today=today, tz=tz)
             record = {"stages": out["stages"], "outcome": out["outcome"], "degraded": out["degraded"],
                       "route": out.get("route"), "route_note": out.get("route_note"),
                       "duration_s": out["duration_s"], "sides": {"A": side_a, "B": side_b}, "mode": mode,
@@ -301,7 +322,8 @@ def ask_route(request: Request,
               question: str = Form(...), thread_id: str = Form(""),
               a_provider: str = Form(...), a_model: str = Form(...), a_effort: str = Form("medium"),
               b_provider: str = Form(""), b_model: str = Form(""), b_effort: str = Form("medium"),
-              mode: str = Form("auto"), file_ids: str = Form(""), csrf: str = Form(...)):
+              mode: str = Form("auto"), file_ids: str = Form(""), csrf: str = Form(...),
+              today: str = Form(""), tz: str = Form("")):
     s = guard(request)
     check_csrf(s, csrf)
     if LIFECYCLE.draining.is_set():
@@ -313,7 +335,8 @@ def ask_route(request: Request,
     question = question.strip()[:20000]
     if not question:
         raise HTTPException(400, "empty question")
-    free = mode == "auto" and exact.solve(question) is not None  # computed in code: no model, no quota
+    day, zone = _asker_day(today, tz)
+    free = mode == "auto" and exact.solve(question, day, zone) is not None  # computed in code: no model, no quota
     if not free and db.usage_today(s["user_id"]) >= daily_quota():
         raise HTTPException(429, "Daily run quota reached. It resets at midnight.")
     if thread_id and not db.get_thread(thread_id, s["user_id"]):
@@ -337,7 +360,7 @@ def ask_route(request: Request,
     if not free:
         db.bump_usage(s["user_id"])
     try:
-        _start_job(mid, s["user_id"], question, history, side_a, side_b, mode, paths)
+        _start_job(mid, s["user_id"], question, history, side_a, side_b, mode, paths, day, zone)
     except BaseException:  # the run never started: don't leave a drain waiting on it
         LIFECYCLE.end(mid)
         db.update_message(mid, content="The run could not start. Try again.", status="error")

@@ -79,6 +79,23 @@ def test_exact_questions_are_answered_even_when_the_quota_is_used_up(client, adm
     assert ask(client, admin, question="What is x?", mode="auto").status_code == 429
 
 
+def test_the_browsers_date_makes_relative_dates_exact_and_a_wrong_one_is_ignored(client, admin, llm, monkeypatch):
+    from datetime import date
+
+    import app.main as main
+
+    monkeypatch.setattr(main, "_utc_today", lambda: date(2026, 10, 31))   # 03:00 UTC: still the 30th in New York
+    r = ask(client, admin, question="How many days until Christmas?", mode="auto", today="2026-10-30",
+            tz="America/New_York")
+    d = wait_done(client, r.json()["message_id"])
+    assert d["content"] == "56 days" and llm.calls == []
+    # a date more than a day from UTC's is no one's today: the question goes to the models
+    r = ask(client, admin, question="How many days until Christmas?", mode="auto", today="2020-01-01",
+            tz="Bad Zone; drop table")
+    wait_done(client, r.json()["message_id"])
+    assert llm.calls and not any("Today is" in p for p in llm.prompts)
+
+
 def test_a_short_fact_the_models_disagree_on_says_not_sure_and_what_each_said(client, admin, llm):
     llm.on(provider="alpha", purpose="answer", reply="[fact]\nSydney")
     llm.on(provider="beta", purpose="answer", reply="[fact]\nCanberra")
