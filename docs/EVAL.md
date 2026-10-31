@@ -166,6 +166,12 @@ to the models; a test keeps it that way).
   by hash. Resuming a run on different code or a different registry is refused
   (`--allow-version-change` overrides it, and the report then says the run
   mixed versions). The dataset and grader prompt can't change mid-run at all.
+- **Closed-book, Crossfact included.** The app's short-fact route can search
+  the web (docs/DESIGN.md, "Search"); the harness turns that off unless a
+  config has a `search:` section. An open-book comparison needs baselines with
+  the same search (one model reading the same pages), and must keep out pages
+  that copy the benchmark's answers (`search.exclude_domains`); until then a
+  win with search would show that search helps, which is known.
 - **Crossfact's time limits are relaxed** in the free run (30 minutes instead of
   10, and 15 minutes instead of 150 s for a side that lags the other): waiting
   out free-tier rate limits isn't slowness. Nothing else in the pipeline

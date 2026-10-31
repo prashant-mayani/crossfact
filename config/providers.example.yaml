@@ -54,6 +54,20 @@ pipeline:
     gemini/gemini-4-argon: [{model: gemini-3.8-flash}]
     claude/opus: [{model: sonnet}]
 
+# Web search for short facts (app/search.py, docs/DESIGN.md "Search"): when the two
+# models disagree, neither is sure, or the fact can change over time, a third model
+# reads what a search found and must quote it; a quote counts only if this server
+# loaded the page and found it there. Wikipedia needs no key. Tavily (tavily.com,
+# 1,000 free searches a month) joins in once its key is in the vault, capped per day.
+search:
+  enabled: true
+  wikipedia: {enabled: true, lang: en, pages: 3}
+  tavily: {secret: tavily_api_key, results: 5, daily_limit: 30}
+  pages: 5                      # pages loaded per search, at most
+  fetch_timeout_s: 8
+  max_page_bytes: 3000000
+  exclude_domains: [huggingface.co, kaggle.com]   # they host copies of benchmark answers
+
 defaults:
   side_a: {provider: claude, model: sonnet, effort: medium}
   # Side B starts on Gemini 3.6 Flash and moves to 3.8 Flash only while 3.8 is

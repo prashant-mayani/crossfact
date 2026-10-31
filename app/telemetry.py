@@ -47,6 +47,8 @@ DRAINING = Gauge("crossfact_draining", "1 while this pod is draining for shutdow
 FAULTS_ACTIVE = Gauge("crossfact_fault_injections_active", "Active injected faults", ["target", "mode"])
 PREFERRED_ACTIVE = Gauge("crossfact_preferred_model_active",
                          "1 while new questions on a side start with its preferred model (app/promotion.py)", ["side"])
+SEARCHES = Counter("crossfact_searches", "Web searches for short facts, by service and result", ["provider", "result"])
+PAGE_FETCHES = Counter("crossfact_page_fetches", "Pages loaded to check a quoted source", ["result"])
 PREFERRED_CHECKS = Counter("crossfact_preferred_model_checks", "Background checks of a side's preferred model",
                            ["side", "result"])
 

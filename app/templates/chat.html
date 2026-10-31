@@ -9,7 +9,8 @@
   'judge_failed': 'The models still disagreed and no judge was available, so both positions are shown.',
   'deadline': 'Stopped early to stay inside the time limit; anything unfinished is shown as it stood.',
   'merge_failed': 'Merging failed, so both answers are shown in full.'} %}
-{% set CHIP = {'abandoned': 'interrupted', 'error': 'failed', 'unsure': 'not sure', 'majority': '2 of 3'} %}
+{% set CHIP = {'abandoned': 'interrupted', 'error': 'failed', 'unsure': 'not sure', 'majority': '2 of 3',
+                'sourced': 'source found'} %}
 
 {% macro stage_view(st) -%}
 <div class="stage {{ st.stage }}">
@@ -38,6 +39,13 @@ B: {{ st.b }}</pre>
   {% elif st.stage == 'error' %}<pre class="err">{{ st.where }}{% if st.model %} ({{ st.model }}){% endif %}{% if st.kind %} · {{ st.kind }}{% endif %}: {{ st.detail }}</pre>
   {% elif st.stage == 'note' %}<pre>{{ st.detail }}</pre>
   {% elif st.stage == 'exact' %}<pre>{{ st.working }}</pre>
+  {% elif st.stage == 'search' %}<div class="cmp"><b>searched for:</b> {{ st.query }} · {{ (st.services or []) | join(', ') or 'no service' }}{% if st.duration_s is defined %} · {{ st.duration_s }}s{% endif %}</div>
+    <pre>{% for src in st.sources or [] %}{{ '✓' if src.loaded else '✗' }} {{ src.title }} ({{ src.url }}){% if src.error %}: {{ src.error }}{% endif %}
+{% else %}nothing found
+{% endfor %}{% for e in st.errors or [] %}{{ e }}
+{% endfor %}</pre>
+  {% elif st.stage == 'settle' %}<div class="cmp"><b>answer:</b> {{ st.answer }} · {{ 'quote checked on the page' if st.checked else 'not accepted: ' ~ st.why }}</div>
+    {% if st.quote %}<pre>“{{ st.quote }}”{% if st.title %} ({{ st.title }}){% endif %}</pre>{% endif %}
   {% elif st.stage == 'fact' %}<div class="cmp"><b>verdict:</b> {{ CHIP.get(st.verdict, st.verdict) }}</div>
     <pre>{% for x in st.answers %}{{ x.model }}: {{ 'not sure' if x.answer.strip() in ('', '?') else x.answer }}
 {% endfor %}</pre>
@@ -90,6 +98,9 @@ B: {{ st.b }}</pre>
             {% for r in pl.degraded or [] %}<p class="banner">{{ REASONS.get(r, r) }}</p>{% endfor %}
             {% if pl.route_note %}<p class="banner routed {{ oc }}">{{ pl.route_note }}</p>{% endif %}
             <div class="content">{{ m.content }}</div>
+            {% for src in pl.sources or [] if (src.url or '').startswith('https://') %}
+              <p class="source">Source: <a href="{{ src.url }}" target="_blank" rel="noopener noreferrer nofollow">{{ src.title }}</a> · “{{ src.quote }}”</p>
+            {% endfor %}
             {% if m.status == 'running' %}<div class="running">running<span class="dots"></span></div>{% endif %}
             {% if m.status == 'error' or oc in ('degraded', 'abandoned') %}<button class="retry" type="button">Retry</button>{% endif %}
             {% if pl.stages %}

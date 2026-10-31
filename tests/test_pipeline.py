@@ -398,7 +398,7 @@ def test_two_different_answers_are_not_sure_and_say_what_each_model_said(llm):
     before = runs("fact", "unsure")
     out = auto()
     assert out["outcome"] == "unsure" and out["final"] == "Not sure." and out["degraded"] == []
-    assert out["route_note"] == "alpha/a1: Sydney · beta/b1: Canberra. No source settled it."
+    assert out["route_note"] == "alpha/a1: Sydney · beta/b1: Canberra."  # no search is set up in tests
     # by the 2-of-3 rule a third model couldn't settle two different answers, so none is asked
     assert llm.count(purpose="vote") == 0 and llm.count(purpose="judge") == 0
     assert runs("fact", "unsure") == before + 1

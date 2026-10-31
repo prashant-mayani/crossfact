@@ -182,6 +182,14 @@ table.users th, table.users td { text-align: left; padding: .45rem .4rem;
 .chip.majority { color: var(--ok); border-color: var(--ok); }
 .chip.unsure { color: var(--unsure); border-color: var(--unsure); }
 .stage.exact { border-color: var(--exact); }
+/* search: an answer a source states, with the source and the words it was checked against */
+.verdictbar.sourced { background: linear-gradient(90deg, var(--a) 0%, var(--b) 25%, var(--focus) 60%, var(--focus));
+  opacity: 1; }
+.chip.sourced { color: var(--focus); border-color: var(--focus); }
+.banner.routed.sourced { border-left-color: var(--focus); }
+.source { margin: .5rem 0 0; font-size: .88rem; color: var(--dim); overflow-wrap: anywhere; }
+.source a { color: var(--focus); }
+.stage.search, .stage.settle { border-color: var(--focus); }
 .stage.fact { border-color: var(--ok); }
 button.retry { margin-top: .5rem; background: none; color: var(--focus); border: 1px solid var(--line);
   border-radius: 6px; padding: .3rem .8rem; cursor: pointer; font: inherit; font-size: .85rem; }

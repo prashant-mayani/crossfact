@@ -301,6 +301,7 @@ def _start_job(mid: str, uid: str, question: str, history: str, side_a: dict, si
             out = run_pipeline(question, history, side_a, side_b, mode, file_paths, progress, today=today, tz=tz)
             record = {"stages": out["stages"], "outcome": out["outcome"], "degraded": out["degraded"],
                       "route": out.get("route"), "route_note": out.get("route_note"),
+                      "sources": out.get("sources") or [],
                       "duration_s": out["duration_s"], "sides": {"A": side_a, "B": side_b}, "mode": mode,
                       "files": [os.path.basename(p) for p in file_paths]}
             status = "error" if out["outcome"] == "error" else "done"

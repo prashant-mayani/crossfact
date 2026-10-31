@@ -112,7 +112,7 @@
    "description": "",
    "targets": [
     {
-     "expr": "sum(increase(crossfact_runs_total{namespace=\"$namespace\",outcome=~\"agreed|debated|judged|union|majority|unsure\"}[24h])) / sum(increase(crossfact_runs_total{namespace=\"$namespace\",mode!~\"single|exact\"}[24h]))",
+     "expr": "sum(increase(crossfact_runs_total{namespace=\"$namespace\",outcome=~\"agreed|debated|judged|union|majority|unsure|sourced\"}[24h])) / sum(increase(crossfact_runs_total{namespace=\"$namespace\",mode!~\"single|exact\"}[24h]))",
      "legendFormat": "__auto",
      "refId": "A",
      "exemplar": false,

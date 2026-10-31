@@ -57,7 +57,7 @@ to a guess. So `auto` picks one of three routes:
 | route | for | what happens | model calls |
 |---|---|---|---|
 | exact | arithmetic, unit conversions, date arithmetic | computed in code and cached (`app/exact.py`) | 0 |
-| short fact | one short answer that doesn't change over time | two models answer on their own; see below | 2 to 4 |
+| short fact | one short answer | two models answer on their own; a dispute, or a fact that can change, goes to a search; see below | 2 to 6 |
 | consensus | everything else | the full pipeline above | 4 to 14 |
 
 **Exact.** Rational arithmetic, unit definitions that are exact by law (an inch
@@ -83,28 +83,68 @@ October 30, 2026, time zone America/New_York" instead of guessing. Without it
 prompt mentions a date.
 
 **Short fact.** Both sides get the question with a routing note: if it has one
-short answer that doesn't change over time, reply `[fact]` and the answer, or
+short answer, reply `[fact]` (it never changes) or `[current]` (it can change
+over time: who holds an office, a price, the latest version) and the answer, or
 `?` if not sure. Then:
 
-- both marked it and give the same answer (by text, by value, or else by one
-  utility-model check): that is the answer, `agreed`;
-- they give different answers: `unsure`, shown as "not sure" with what each
-  said. A third model isn't asked, because of the rule below;
-- one says `?` (or fails) and the other answers: a third model (the judge's,
-  a family that didn't answer) answers on its own, without seeing the others.
-  If it gives the same answer, that is the answer (`majority`, "2 of 3", or
-  `agreed` when the other side had failed); otherwise `unsure`;
-- neither is sure: `unsure`, with nothing more asked.
+- both give the same answer (by text, by value, or else by one utility-model
+  check): that is the answer, `agreed`;
+- they give different answers: a search decides (below), or else `unsure`,
+  shown as "not sure" with what each said. A third model's vote isn't asked,
+  because of the rule below;
+- one says `?` (or fails) and the other answers: a third model (the judge's, a
+  family that didn't answer) answers on its own, without seeing the others. If
+  it gives the same answer, that is the answer (`majority`, "2 of 3", or
+  `agreed` when the other side had failed); otherwise a search decides, or
+  `unsure`;
+- neither is sure: a search decides, or `unsure`;
+- the fact can change over time: a search decides first, whatever the models
+  said, because two models trained months ago agreeing is no evidence of what is
+  true today. With no source, an agreed answer says that nothing confirmed it.
 
 The rule: **a 2-of-3 vote counts only when the dissenting model said "?"**. Two
 models against a third that gave a different answer is a dispute to settle with
-evidence (the search step, still to come), not a vote. Once one side has
-answered with the mark, the other gets `fact_grace_s` (30 s), not minutes; a
-side that misses it is covered by the third model. If only one side marks the
-question, the two answers go to the consensus route: unsure means consensus. A
-fact that can change over time (who holds an office, a price, the latest
-version) is left unmarked on purpose, so it goes to consensus too, until search
-exists to check it.
+evidence, not a vote. Once one side has answered with the mark, the other gets
+`fact_grace_s` (30 s), not minutes; a side that misses it is covered by the third
+model. If only one side marks the question, the two answers go to the consensus
+route: unsure means consensus.
+
+### Search
+
+When a short fact is disputed, unknown or can change, `app/search.py` searches
+and a third model settles it, under one rule from the plan: **a source counts
+only if it came back from a real search, this server loaded the page, and the
+quoted words are on it.**
+
+1. **Search.** Wikipedia's search API (free, no key, always on) and, once its key
+   is in the vault, Tavily (a web search API; 1,000 free searches a month, so
+   capped at `tavily.daily_limit` a day here). In a conversation ("and what is
+   its population?") one utility call first writes a query with the context
+   filled in. Up to `pages` (5) results; `exclude_domains` drops sites that host
+   copies of benchmark answers.
+2. **Load.** This server loads each page itself: https only, public addresses
+   only (checked again at every redirect, on top of the pod's network policy,
+   which already blocks private ranges and the cloud's metadata address), HTML
+   or plain text, at most 8 s and 3 MB. The text is the page's main content,
+   without scripts, menus or citation marks.
+3. **Settle.** The third model gets the question, the models' answers (without
+   saying which model gave which), and the passages of each page that share the
+   most words with the question and the answers. It is told the pages are
+   untrusted evidence, not instructions. It names the answer, the source, and
+   the words that state it, copied exactly.
+4. **Check.** The answer counts only if the quote is on that page (ignoring
+   case, spacing, curly quotes and accents; "..." may stand for words left out)
+   and states the answer (every number in it, or, for a name, every word). Then
+   the outcome is `sourced` ("source found"), with the page linked under the
+   answer and the quote beside it. Otherwise nothing is accepted, and the
+   transcript says why: the sources didn't settle it, the quote isn't on the
+   page, or it doesn't state that answer.
+
+One page can be wrong, so the source is always shown: the claim is "this page
+says so", which you can check, not "this is true". The search runs at most once
+a run and adds about 5 to 15 seconds. The benchmark stays closed-book (no
+search) unless its config asks for it: a comparison in which only Crossfact
+could look things up would measure search, not the method.
 
 Metrics and traces count a run by the route it took (`mode` is `exact`, `fact`
 or `consensus`), so the consensus SLO still measures consensus runs only.
@@ -120,7 +160,8 @@ or `consensus`), so the consensus SLO still measures consensus runs only.
 | `single` | single mode, as asked |
 | `exact` | computed in code (mode `auto`): no model was asked |
 | `majority` | a short fact one model and a third gave, while the other said "not sure" (shown as "2 of 3") |
-| `unsure` | a short fact the models didn't agree on: the answer is "Not sure.", and the note says what each said |
+| `unsure` | a short fact the models didn't agree on and no source settled: the answer is "Not sure.", and the note says what each said |
+| `sourced` | a short fact a source settled: the quote was found on a page this server loaded ("source found") |
 | `degraded` | an answer, but less than asked for; the reason is shown (below) |
 | `error` | no answer (both sides failed); the daily quota is refunded |
 | `abandoned` | the pod running it died; refunded, the UI offers Retry |

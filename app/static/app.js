@@ -14,7 +14,8 @@
     deadline: 'Stopped early to stay inside the time limit; anything unfinished is shown as it stood.',
     merge_failed: 'Merging failed, so both answers are shown in full.',
   };
-  const CHIP = {abandoned: 'interrupted', error: 'failed', unsure: 'not sure', majority: '2 of 3'};
+  const CHIP = {abandoned: 'interrupted', error: 'failed', unsure: 'not sure', majority: '2 of 3',
+    sourced: 'source found'};
 
   // ---- every page: local times, confirm prompts ---------------------------------
   $$('time[data-ts]').forEach((t) => {
@@ -152,6 +153,16 @@
       body = `<pre>${esc(st.detail)}</pre>`;
     } else if (st.stage === 'exact') {
       body = `<pre>${esc(st.working)}</pre>`;
+    } else if (st.stage === 'search') {
+      const found = (st.sources || []).map((src) => `${src.loaded ? '✓' : '✗'} ${esc(src.title)} (${esc(src.url)})` +
+        (src.error ? `: ${esc(src.error)}` : '')).join('\n') || 'nothing found';
+      const errs = (st.errors || []).map(esc).join('\n');
+      body = `<div class="cmp"><b>searched for:</b> ${esc(st.query)} · ${esc((st.services || []).join(', ') || 'no service')}` +
+        `${st.duration_s != null ? ' · ' + st.duration_s + 's' : ''}</div><pre>${found}${errs ? '\n' + errs : ''}</pre>`;
+    } else if (st.stage === 'settle') {
+      body = `<div class="cmp"><b>answer:</b> ${esc(st.answer)} · ` +
+        `${st.checked ? 'quote checked on the page' : 'not accepted: ' + esc(st.why)}</div>` +
+        (st.quote ? `<pre>“${esc(st.quote)}”${st.title ? ' (' + esc(st.title) + ')' : ''}</pre>` : '');
     } else if (st.stage === 'fact') {
       const said = (st.answers || []).map((x) =>
         `${esc(x.model)}: ${esc(['', '?'].includes((x.answer || '').trim()) ? 'not sure' : x.answer)}`).join('\n');
@@ -178,8 +189,11 @@
     const details = stages.length
       ? `<details class="pipeline" ${data.status === 'running' ? 'open' : ''}><summary>Pipeline transcript ` +
         `(${stages.length} stages)</summary><div class="stages">${stages.map(stageHtml).join('')}</div></details>` : '';
+    const sources = (pl.sources || []).filter((src) => /^https:\/\//.test(src.url || '')).map((src) =>
+      `<p class="source">Source: <a href="${esc(src.url)}" target="_blank" rel="noopener noreferrer nofollow">` +
+      `${esc(src.title)}</a> · “${esc(src.quote)}”</p>`).join('');
     el.querySelector('.bubble').innerHTML =
-      `${chip}${banners}<div class="content">${esc(data.content)}</div>${running}${retry}${details}`;
+      `${chip}${banners}<div class="content">${esc(data.content)}</div>${sources}${running}${retry}${details}`;
     if (pl.sides) el.dataset.sides = JSON.stringify(pl.sides);
     if (pl.mode) el.dataset.mode = pl.mode;
   }

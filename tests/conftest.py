@@ -29,6 +29,7 @@ TEST_PROVIDERS = textwrap.dedent("""
       judge: {provider: judge, model: j1, effort: high}
       fallbacks:
         beta/b1: [{model: b2}]
+    search: {enabled: false}      # tests turn it on with a fake web (tests/test_search.py)
     defaults:
       side_a: {provider: alpha, model: a1, effort: medium}
       side_b: {provider: beta, model: b1, effort: medium}
@@ -61,6 +62,10 @@ def purpose_of(prompt: str) -> str:
         return "same"
     if "reply with exactly: ?" in prompt:
         return "vote"
+    if "You settle a short factual question with web sources" in prompt:
+        return "settle"
+    if "Write a web search query" in prompt:
+        return "query"
     if "neutral arbiter" in prompt:
         return "judge"
     if "Reconsider ONLY" in prompt:

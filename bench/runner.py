@@ -76,7 +76,10 @@ def setup_app(cfg: dict, workdir: str) -> str:
 
     config.PROVIDERS_PATH = _MERGED.get(config.PROVIDERS_PATH, config.PROVIDERS_PATH)  # never merge over a merge
     config.reload()
-    reg = _merge(config.registry(), {"providers": cfg.get("providers") or {}, "pipeline": cfg.get("pipeline") or {}})
+    # Closed-book unless the config asks for search: the baselines don't search, and a
+    # comparison in which only Crossfact could look things up would measure search.
+    reg = _merge(config.registry(), {"providers": cfg.get("providers") or {}, "pipeline": cfg.get("pipeline") or {},
+                                     "search": cfg.get("search") or {"enabled": False}})
     text = yaml.safe_dump(reg, sort_keys=True)
     path = os.path.join(workdir, "bench-providers.yaml")
     with open(path, "w") as f:
