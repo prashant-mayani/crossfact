@@ -110,8 +110,12 @@ systems:
     side_b: gemini/gemini-3.5-flash-lite
 
 # The headline, fixed before the run: Crossfact as the app runs it (crossfact-auto)
-# against the best single model by F1, on wrong answers and on F1 (Holm-adjusted
-# over the two). Every other comparison in the report is secondary and
-# Holm-adjusted across the table.
-primary: {system: crossfact-auto}
+# against each rival the plan names (the best single model by F1, a majority of
+# three, and Mixture-of-Agents), on wrong answers and on F1: six tests,
+# Holm-adjusted together. "Fewer wrong answers than all three" holds only if all
+# three wrong-answer tests pass. Every other comparison in the report is
+# secondary and Holm-adjusted across the table.
+primary:
+  system: crossfact-auto
+  against: [best_single, vote-3, moa-3]
 reference: best_single   # the best single model by F1 (or name a system)

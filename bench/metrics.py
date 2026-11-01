@@ -19,11 +19,14 @@ Against a reference (the best single model by F1, unless the config names one):
   an exact McNemar test on the paired outcomes. A system that only abstains more
   lowers its incorrect rate and its correct rate together; both are shown.
 
-The headline, chosen before the run (the config's primary, by default Crossfact
-against the reference): the change in wrong answers (exact McNemar) and in F1
-(paired permutation test, with a paired bootstrap interval), Holm-adjusted over
-those two. Every other comparison is secondary, Holm-adjusted across the table:
-with sixteen p-values, one under 0.05 is expected by chance alone.
+The headline, chosen before the run (the config's primary: a system, and the
+systems it is compared with, by default the reference): against each, the change
+in wrong answers (exact McNemar) and in F1 (paired permutation test, with a
+paired bootstrap interval), all Holm-adjusted together. A claim of fewer wrong
+answers than all of them needs every one of those wrong-answer tests to pass;
+F1 beside each shows whether abstaining cost more right answers than it saved.
+Every other comparison is secondary, Holm-adjusted across the table: with
+eighteen p-values, one under 0.05 is expected by chance alone.
 """
 from __future__ import annotations
 
@@ -98,7 +101,7 @@ def f1_difference(mine: list[str], ref: list[str], boot: int = 2000, seed: int =
 
 
 def summarize(rows: list[dict], reference: str | None = None, boot: int = 2000, seed: int = 0,
-              primary: str | None = None) -> dict:
+              primary: str | None = None, against: list[str] | None = None) -> dict:
     """rows: {system, kind, qid, grade (or None), error, latency, cached, participant_grades: list}."""
     systems: dict[str, list[dict]] = {}
     for r in rows:
@@ -166,16 +169,29 @@ def summarize(rows: list[dict], reference: str | None = None, boot: int = 2000, 
             paired[name] = res
 
     head = None
-    if ref and primary in paired:
-        common = sorted(set(by[primary]) & set(by[ref]))
-        f1 = f1_difference([by[primary][q] for q in common], [by[ref][q] for q in common], boot, seed)
-        p_wrong, p_f1 = holm([paired[primary]["incorrect_p"], f1["p"]])
-        head = {"system": primary, "reference": ref, "n": len(common),
-                "incorrect_delta": paired[primary]["incorrect_delta"], "incorrect_p": paired[primary]["incorrect_p"],
-                "incorrect_p_holm": p_wrong, "f1_delta": f1["delta"], "f1_ci": f1["ci"], "f1_p": f1["p"],
-                "f1_p_holm": p_f1}
+    rivals = [ref if a in ("best_single", "reference") else a for a in (against or ["best_single"])]
+    rivals = [r for r in dict.fromkeys(rivals) if r and r != primary and r in by]
+    if primary in by and rivals:
+        comparisons = []
+        for rival in rivals:
+            common = sorted(set(by[primary]) & set(by[rival]))
+            mine, theirs = [by[primary][q] for q in common], [by[rival][q] for q in common]
+            b = sum(1 for x, y in zip(mine, theirs, strict=True) if y == "INCORRECT" and x != "INCORRECT")
+            c = sum(1 for x, y in zip(mine, theirs, strict=True) if x == "INCORRECT" and y != "INCORRECT")
+            f1 = f1_difference(mine, theirs, boot, seed)
+            comparisons.append({"against": rival, "best_single": rival == ref and reference not in out,
+                                "n": len(common), "incorrect_delta": (c - b) / len(common) if common else 0.0,
+                                "incorrect_p": mcnemar_exact(b, c), "incorrect_discordant": [b, c],
+                                "f1_delta": f1["delta"], "f1_ci": f1["ci"], "f1_p": f1["p"]})
+        adjusted = holm([x[k] for x in comparisons for k in ("incorrect_p", "f1_p")])
+        for i, x in enumerate(comparisons):
+            x["incorrect_p_holm"], x["f1_p_holm"] = adjusted[2 * i], adjusted[2 * i + 1]
+        head = {"system": primary, "reference": ref, "tests": len(adjusted), "comparisons": comparisons,
+                "fewer_wrong_than_all": all(x["incorrect_delta"] < 0 and x["incorrect_p_holm"] < 0.05
+                                            for x in comparisons)}
+    in_headline = head is not None and ref in [x["against"] for x in head["comparisons"]]
     tests = [(name, k) for name in paired for k in ("correct_p", "incorrect_p")
-             if not (name == primary and k == "incorrect_p")]
+             if not (in_headline and name == primary and k == "incorrect_p")]
     for (name, k), adj in zip(tests, holm([paired[name][k] for name, k in tests]), strict=True):
         paired[name][k + "_holm"] = adj
     return {"systems": out, "reference": ref, "paired": paired, "primary": head, "questions": len(qids)}

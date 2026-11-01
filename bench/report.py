@@ -30,12 +30,29 @@ def markdown(res: dict) -> str:
              ]
     h = res.get("primary")
     if h:
-        lines += [f"**Headline, chosen before the run: {h['system']} against {h['reference']}** (the best single model "
-                  f"by F1, the rule fixed in advance), on the {h['n']} questions both answered: wrong answers "
-                  f"{100 * h['incorrect_delta']:+.1f} pp (exact McNemar p = {h['incorrect_p']:.3f}, Holm "
-                  f"{h['incorrect_p_holm']:.3f}); F1 {100 * h['f1_delta']:+.1f} points (95% interval "
-                  f"{100 * h['f1_ci'][0]:+.1f} to {100 * h['f1_ci'][1]:+.1f}; paired permutation p = {h['f1_p']:.3f}, "
-                  f"Holm {h['f1_p_holm']:.3f}). Holm-adjusted over these two tests; everything below is secondary.", ""]
+        def who(c: dict) -> str:
+            return f"{c['against']} (the best single model by F1)" if c["best_single"] else c["against"]
+
+        rivals = [who(c) for c in h["comparisons"]]
+        listed = rivals[0] if len(rivals) == 1 else ", ".join(rivals[:-1]) + " and " + rivals[-1]
+        lines += [f"**Headline, chosen before the run: {h['system']} against {listed}**, on the questions each pair "
+                  f"answered: the change in wrong answers (exact McNemar) and in F1 (paired permutation, with a paired "
+                  f"bootstrap interval), {h['tests']} tests Holm-adjusted together. Everything below is secondary.", "",
+                  "| against | questions | change in wrong answers | p (Holm) | change in F1 (95% interval) "
+                  "| p (Holm) |",
+                  "|---|---|---|---|---|---|"]
+        for c in h["comparisons"]:
+            ci = c["f1_ci"] if c["f1_ci"] and c["f1_ci"][0] is not None else None
+            lines.append(f"| {who(c)} | {c['n']} | {100 * c['incorrect_delta']:+.1f} pp | {c['incorrect_p']:.3f} "
+                         f"({c['incorrect_p_holm']:.3f}) | {100 * c['f1_delta']:+.1f}"
+                         + (f" ({100 * ci[0]:+.1f} to {100 * ci[1]:+.1f})" if ci else "")
+                         + f" | {c['f1_p']:.3f} ({c['f1_p_holm']:.3f}) |")
+        verdict = ("holds: fewer wrong answers than each, every test passing after adjustment"
+                   if h["fewer_wrong_than_all"] else
+                   "does not hold on this run: not every wrong-answer test above passed after adjustment")
+        claim = f"fewer wrong answers than {'it' if len(rivals) == 1 else 'all of them'}"
+        lines += ["", f"The claim \"{claim}\" {verdict}. Fewer wrong answers with a lower F1 means abstaining cost "
+                  "more right answers than it saved.", ""]
     lines += ["| system | graded | correct | wrong | not sure | accuracy when it answered | F1 | errors | "
               "median latency | calls per question |",
               "|---|---|---|---|---|---|---|---|---|---|"]

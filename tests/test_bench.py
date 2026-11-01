@@ -562,15 +562,45 @@ def test_the_headline_is_fixed_in_advance_and_the_rest_is_adjusted(bench_env):
     run_id, _ = go(bench_env, bench_env["write"]())
     res = results(bench_env, run_id)
     h = res["primary"]
-    assert (h["system"], h["reference"], h["n"]) == ("crossfact", "single-alpha", 4)
-    assert h["incorrect_delta"] == pytest.approx(-0.25) and h["f1_delta"] == pytest.approx(0.25)
-    assert h["incorrect_p_holm"] >= h["incorrect_p"] and h["f1_p_holm"] >= h["f1_p"]
+    assert (h["system"], h["reference"], h["tests"]) == ("crossfact", "single-alpha", 2)
+    (c,) = h["comparisons"]
+    assert (c["against"], c["best_single"], c["n"]) == ("single-alpha", True, 4)
+    assert c["incorrect_delta"] == pytest.approx(-0.25) and c["f1_delta"] == pytest.approx(0.25)
+    assert c["incorrect_p_holm"] >= c["incorrect_p"] and c["f1_p_holm"] >= c["f1_p"]
     p = res["paired"]
     assert "incorrect_p_holm" not in p["crossfact"] and "correct_p_holm" in p["crossfact"]
     assert all("incorrect_p_holm" in v and "correct_p_holm" in v for k, v in p.items() if k != "crossfact")
     md = report.markdown(res)
-    assert md.index("Headline, chosen before the run: crossfact against single-alpha") < md.index("| system | graded")
+    assert md.index("Headline, chosen before the run: crossfact against single-alpha (the best single model by F1)") \
+        < md.index("| system | graded")
     assert "(headline)" in md
+
+
+def test_the_headline_can_name_every_rival_the_plan_does(bench_env):
+    """The plan's claim: fewer wrong answers than the best single model, a majority of
+    three and Mixture-of-Agents. Six tests, adjusted together; the claim needs all three."""
+    from bench import report
+
+    path = bench_env["write"](primary={"system": "crossfact", "against": ["best_single", "vote", "moa"]})
+    run_id, _ = go(bench_env, path)
+    res = results(bench_env, run_id)
+    h = res["primary"]
+    assert h["tests"] == 6 and [c["against"] for c in h["comparisons"]] == ["single-alpha", "vote", "moa"]
+    holm = [c[k] for c in h["comparisons"] for k in ("incorrect_p_holm", "f1_p_holm")]
+    raw = [c[k] for c in h["comparisons"] for k in ("incorrect_p", "f1_p")]
+    assert all(a >= r for a, r in zip(holm, raw, strict=True))
+    # vote and MoA got all four right too: no fewer wrong answers than them, so the claim doesn't hold
+    assert h["comparisons"][1]["incorrect_delta"] == 0 and h["fewer_wrong_than_all"] is False
+    md = report.markdown(res)
+    assert "against single-alpha (the best single model by F1), vote and moa" in md
+    assert "does not hold on this run" in md
+
+
+def test_a_headline_naming_a_system_the_run_lacks_is_refused(bench_env):
+    from bench.runner import RunError
+
+    with pytest.raises(RunError, match="doesn't run: vote-3"):
+        go(bench_env, bench_env["write"](primary={"system": "crossfact", "against": ["vote-3"]}))
 
 
 def test_abstaining_more_lowers_wrong_and_correct_together():

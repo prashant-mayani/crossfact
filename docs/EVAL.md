@@ -111,19 +111,24 @@ the systems with each other, all graded the same way.
 
 Written down before any real result, so the numbers can't choose the question.
 
-**The headline** is one comparison: **Crossfact as the app runs it
-(`crossfact-auto`) against the best single model by F1**, on the questions both
-answered, on two measures: the change in **wrong answers** (exact McNemar test)
-and the change in **F1** (paired permutation test, with a paired bootstrap
-interval), Holm-adjusted over the two. Wrong answers alone would reward a
-system for abstaining; F1 falls when abstaining costs more right answers than
-it saves wrong ones, so the two together say whether "not sure" was worth it.
-It is printed first and named as the headline in every report (`primary` in the
-config). Everything else is secondary: the comparison table holds eighteen
-p-values, and among that many about one comes in under 0.05 by chance alone, so
-the seventeen besides the headline's are Holm-adjusted across the table and read
-as leads, not findings. (The headline moved from consensus-mode `crossfact` to
-`crossfact-auto` when routing became the default, before any run.)
+**The headline** is the plan's first claim, tested as it is worded: **Crossfact
+as the app runs it (`crossfact-auto`) has fewer wrong answers than the best
+single model, a majority of three, and Mixture-of-Agents.** Against each of the
+three (the best single model by F1, picked after the run, which flatters it;
+`vote-3`; `moa-3`), on the questions both answered: the change in **wrong
+answers** (exact McNemar test) and the change in **F1** (paired permutation
+test, with a paired bootstrap interval). That is six tests, Holm-adjusted
+together. The claim holds only if all three wrong-answer tests pass after the
+adjustment. Wrong answers alone would reward a system for abstaining; F1 falls
+when abstaining costs more right answers than it saves wrong ones, so F1 beside
+each says whether "not sure" was worth it. The headline is printed first in
+every report (`primary` in the config, with the rivals under `against`), and the
+report says in words whether the claim held. Everything else is secondary: the
+comparison table holds eighteen p-values, and among that many about one comes in
+under 0.05 by chance alone, so the seventeen besides the headline's are
+Holm-adjusted across the table and read as leads, not findings. (The headline
+moved from consensus-mode `crossfact` against the best single model to this,
+before any run.)
 
 **What we expect: Crossfact v2 will not reduce wrong answers much here.** When
 one model says "I don't know" and the other guesses, the comparator records the
@@ -235,6 +240,17 @@ Keys stay in your shell, on your machine; the config file holds only the
 Cloudflare account ID, which isn't a secret. Prompts go to Groq, Google and
 Cloudflare (the questions are a public benchmark; Gemini's free tier may use
 prompts to improve Google's products).
+
+A run takes days, and a run started on one version of the code refuses to
+resume on another (every file in `app/` counts, so any app change you pull in
+the meantime would stop it). So run it from its own checkout of one commit, and
+keep working in your usual one:
+
+```bash
+git worktree add ../crossfact-bench HEAD && cd ../crossfact-bench   # this commit, for the whole run
+```
+
+Then, in that checkout:
 
 ```bash
 python3.12 -m venv .venv && . .venv/bin/activate              # the pins are for Python 3.12

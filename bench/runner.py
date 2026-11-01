@@ -56,6 +56,11 @@ def load_config(path: str) -> dict:
     names = [s["name"] for s in cfg["systems"]]
     if len(set(names)) != len(names):
         raise RunError(f"{path}: system names must be unique")
+    head = cfg.get("primary") or {}
+    unknown = [a for a in [head.get("system"), *(head.get("against") or [])]
+               if a and a not in names and a not in ("best_single", "reference")]
+    if unknown:
+        raise RunError(f"{path}: the headline names systems this config doesn't run: {', '.join(unknown)}")
     return cfg
 
 
@@ -251,7 +256,9 @@ def results(store: Store, run_id: str, cache_dir: str, template_file: str | None
                      "calls": a["calls"], "cached": a["cached"],
                      "participant_grades": parts if kinds.get(a["system"]) != "single" and all(parts) else []})
     order = [s["name"] for s in cfg["systems"]]
-    primary = (cfg.get("primary") or {}).get("system") or next((n for n, k in kinds.items() if k == "crossfact"), None)
-    summary = metrics.summarize(rows, reference=cfg.get("reference"), seed=int(cfg.get("seed", 1)), primary=primary)
+    head = cfg.get("primary") or {}
+    primary = head.get("system") or next((n for n, k in kinds.items() if k == "crossfact"), None)
+    summary = metrics.summarize(rows, reference=cfg.get("reference"), seed=int(cfg.get("seed", 1)), primary=primary,
+                                against=head.get("against"))
     summary["systems"] = {k: summary["systems"][k] for k in order if k in summary["systems"]}
     return {"run_id": run_id, "meta": meta, "grader": grade.id, **summary}
